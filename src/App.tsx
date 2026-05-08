@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-
+import { supabase } from "./supabase";
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const C = {
   bg: '#0d0f12',
