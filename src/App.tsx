@@ -1,5 +1,27 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase } from "./supabase";
+// Add this inside your existing App() function, before the return statement:
+const [session, setSession] = useState(null);
+const [email, setEmail] = useState("");
+const [password, setPassword] = useState("");
+const [authError, setAuthError] = useState(null);
+const [authLoading, setAuthLoading] = useState(false);
+
+useEffect(() => {
+  supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+  supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+}, []);
+
+const signIn = async () => {
+  setAuthLoading(true);
+  setAuthError(null);
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) setAuthError(error.message);
+  setAuthLoading(false);
+};
+
+const signOut = async () => {
+  await supabase.auth.signOut();
+  setSession(null);
+};
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const C = {
   bg: '#0d0f12',
