@@ -29,7 +29,7 @@ const Input = ({ label, value, onChange, type = "text" }) => (
   <div>
     <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
     <input type={type} value={value} onChange={e => onChange(e.target.value)}
-      style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 13, boxSizing: "border-box" }} />
+      style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
   </div>
 );
 
@@ -37,7 +37,7 @@ const Select = ({ label, value, onChange, options }) => (
   <div>
     <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
     <select value={value} onChange={e => onChange(e.target.value)}
-      style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 13 }}>
+      style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
       {options.map(o => <option key={o}>{o}</option>)}
     </select>
   </div>
@@ -50,7 +50,7 @@ const Btn = ({ children, onClick, variant, disabled }) => {
       background: isPrimary ? C.accent : "transparent",
       color: isPrimary ? "#fff" : C.muted,
       border: isPrimary ? "none" : `1px solid ${C.border}`,
-      borderRadius: 6, padding: "7px 18px", fontSize: 13, fontWeight: 700,
+      borderRadius: 6, padding: "10px 18px", fontSize: 14, fontWeight: 700,
       cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
     }}>{children}</button>
   );
@@ -59,10 +59,10 @@ const Btn = ({ children, onClick, variant, disabled }) => {
 const StatCard = ({ icon, label, value, sub, color }) => (
   <div style={{
     background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
-    padding: "18px 22px", flex: 1, minWidth: 140, borderLeft: `3px solid ${color || C.accent}`,
+    padding: "16px 20px", flex: "1 1 140px", borderLeft: `3px solid ${color || C.accent}`,
   }}>
-    <div style={{ fontSize: 22, marginBottom: 6 }}>{icon}</div>
-    <div style={{ fontSize: 28, fontWeight: 800, color: C.text, fontFamily: "monospace", letterSpacing: 1 }}>{value}</div>
+    <div style={{ fontSize: 20, marginBottom: 6 }}>{icon}</div>
+    <div style={{ fontSize: 26, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{value}</div>
     <div style={{ fontSize: 13, color: C.subtle, marginTop: 2 }}>{label}</div>
     {sub && <div style={{ fontSize: 11, color: color || C.accent, marginTop: 4 }}>{sub}</div>}
   </div>
@@ -87,31 +87,30 @@ function LoginScreen() {
 
   const signIn = async () => {
     if (!email || !password) { setError("Please enter your email and password."); return; }
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
     if (err) setError(err.message);
     setLoading(false);
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif" }}>
-      <div style={{ width: 380 }}>
-        <div style={{ textAlign: "center", marginBottom: 36 }}>
-          <div style={{ background: C.accent, borderRadius: 12, width: 52, height: 52, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, margin: "0 auto 16px" }}>🏭</div>
-          <div style={{ fontFamily: "monospace", fontSize: 22, letterSpacing: 3, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif", padding: 16 }}>
+      <div style={{ width: "100%", maxWidth: 400 }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <div style={{ background: C.accent, borderRadius: 12, width: 56, height: 56, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 16px" }}>🏭</div>
+          <div style={{ fontFamily: "monospace", fontSize: 20, letterSpacing: 3, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 4, letterSpacing: "0.1em" }}>INDUSTRIAL WAREHOUSE MANAGEMENT</div>
         </div>
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28 }}>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 20 }}>Sign in to your account</div>
           <ErrorBanner msg={error} onDismiss={() => setError(null)} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Input label="Email" value={email} onChange={setEmail} type="email" />
             <Input label="Password" value={password} onChange={setPassword} type="password" />
             <button onClick={signIn} disabled={loading} style={{
               background: C.accent, color: "#fff", border: "none", borderRadius: 6,
-              padding: "10px", fontSize: 14, fontWeight: 700,
-              cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginTop: 6,
+              padding: "12px", fontSize: 15, fontWeight: 700,
+              cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginTop: 4,
             }}>
               {loading ? "Signing in..." : "Sign In"}
             </button>
@@ -143,10 +142,10 @@ function WorkOrders({ workOrders, loading, onAdd }) {
   return (
     <div>
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {["All", "Open", "In Progress", "Pending", "Completed"].map(s => (
-            <button key={s} onClick={() => setFilter(s)} style={{ background: filter === s ? C.accent : C.card, color: filter === s ? "#fff" : C.muted, border: `1px solid ${filter === s ? C.accent : C.border}`, borderRadius: 6, padding: "5px 14px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{s}</button>
+            <button key={s} onClick={() => setFilter(s)} style={{ background: filter === s ? C.accent : C.card, color: filter === s ? "#fff" : C.muted, border: `1px solid ${filter === s ? C.accent : C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{s}</button>
           ))}
         </div>
         <Btn onClick={() => setShowForm(v => !v)}>+ New Work Order</Btn>
@@ -154,25 +153,25 @@ function WorkOrders({ workOrders, loading, onAdd }) {
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, letterSpacing: "0.08em", textTransform: "uppercase" }}>New Work Order</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label="Title *" value={form.title} onChange={f("title")} />
             <Input label="Asset / Location *" value={form.asset} onChange={f("asset")} />
             <Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
             <Select label="Priority" value={form.priority} onChange={f("priority")} options={["Critical", "High", "Medium", "Low"]} />
             <Input label="Vendor (optional)" value={form.vendor} onChange={f("vendor")} />
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <Btn onClick={submit} disabled={saving}>{saving ? "Saving..." : "Create"}</Btn>
             <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
           </div>
         </div>
       )}
       {loading ? <Spinner /> : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["ID", "Title", "Asset", "Priority", "Status", "Assignee", "Vendor", "Due"].map(h => (
+                {["ID", "Title", "Asset", "Priority", "Status", "Vendor", "Due"].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -180,17 +179,16 @@ function WorkOrders({ workOrders, loading, onAdd }) {
             <tbody>
               {filtered.map((wo, i) => (
                 <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? "transparent" : C.surface + "44" }}>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
                   <td style={{ padding: "10px 12px" }}><Badge label={wo.priority} color={priorityColor(wo.priority)} /></td>
                   <td style={{ padding: "10px 12px" }}><Badge label={wo.status} color={statusColor(wo.status)} /></td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.assignee || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due && wo.due <= TODAY && wo.status !== "Completed" ? C.red : C.subtle }}>{wo.due || "—"}</td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={8} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={7} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -224,21 +222,21 @@ function Assets({ assets, loading, onAdd }) {
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, letterSpacing: "0.08em", textTransform: "uppercase" }}>Register New Asset</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label="Asset Name *" value={form.name} onChange={f("name")} />
             <Input label="Category" value={form.category} onChange={f("category")} />
             <Input label="Location / Zone" value={form.location} onChange={f("location")} />
             <Input label="Est. Value" value={form.value} onChange={f("value")} />
             <Input label="Next Service Date" value={form.next_service} onChange={f("next_service")} type="date" />
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <Btn onClick={submit} disabled={saving}>{saving ? "Saving..." : "Register"}</Btn>
             <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
           </div>
         </div>
       )}
       {loading ? <Spinner /> : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
           {assets.map(a => (
             <div key={a.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, borderTop: `3px solid ${statusColor(a.status)}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
@@ -283,7 +281,7 @@ function Vendors({ vendors, loading, onAdd }) {
 
   const Stars = ({ rating }) => (
     <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-      {[1, 2, 3, 4, 5].map(i => <span key={i} style={{ color: i <= Math.floor(rating) ? C.yellow : C.border, fontSize: 13 }}>*</span>)}
+      {[1, 2, 3, 4, 5].map(i => <span key={i} style={{ color: i <= Math.floor(rating) ? C.yellow : C.border, fontSize: 14 }}>*</span>)}
       <span style={{ fontSize: 11, color: C.muted, marginLeft: 4 }}>{rating > 0 ? Number(rating).toFixed(1) : "N/A"}</span>
     </div>
   );
@@ -297,21 +295,21 @@ function Vendors({ vendors, loading, onAdd }) {
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, letterSpacing: "0.08em", textTransform: "uppercase" }}>Register Vendor / Contractor</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label="Company Name *" value={form.name} onChange={f("name")} />
             <Input label="Specialty" value={form.specialty} onChange={f("specialty")} />
             <Input label="Contact Person" value={form.contact} onChange={f("contact")} />
             <Input label="Phone" value={form.phone} onChange={f("phone")} />
             <Input label="Email" value={form.email} onChange={f("email")} />
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <Btn onClick={submit} disabled={saving}>{saving ? "Saving..." : "Register"}</Btn>
             <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
           </div>
         </div>
       )}
       {loading ? <Spinner /> : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
           {vendors.map(v => (
             <div key={v.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
@@ -352,17 +350,17 @@ function Overview({ workOrders, assets, vendors }) {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
         <StatCard icon="🔧" label="Open Work Orders" value={open} sub={`${critical} critical`} color={C.accent} />
         <StatCard icon="🏭" label="Operational Assets" value={`${opAssets}/${assets.length}`} sub="fleet status" color={C.green} />
         <StatCard icon="🤝" label="Active Vendors" value={activeVendors} sub="contractors on file" color={C.blue} />
         <StatCard icon="⚠️" label="Overdue / At Risk" value={overdue} sub="past due date" color={C.red} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>Recent Work Orders</div>
           {workOrders.slice(0, 5).map(wo => (
-            <div key={wo.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}22` }}>
+            <div key={wo.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}22`, flexWrap: "wrap", gap: 6 }}>
               <div>
                 <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</div>
                 <div style={{ fontSize: 11, color: C.muted }}>{wo.asset}</div>
@@ -418,12 +416,10 @@ export default function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setAuthLoading(false);
+      setSession(session); setAuthLoading(false);
     });
     supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setAuthLoading(false);
+      setSession(session); setAuthLoading(false);
     });
   }, []);
 
@@ -463,28 +459,34 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif", color: C.text }}>
-      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 28px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 58 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ background: C.accent, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🏭</div>
+      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 58, flexWrap: "wrap", gap: 8, padding: "8px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ background: C.accent, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🏭</div>
             <div>
-              <div style={{ fontFamily: "monospace", fontSize: 18, letterSpacing: 3, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
-              <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", marginTop: -2 }}>INDUSTRIAL WAREHOUSE MANAGEMENT</div>
+              <div style={{ fontFamily: "monospace", fontSize: 16, letterSpacing: 2, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
+              <div style={{ fontSize: 9, color: C.muted, letterSpacing: "0.08em" }}>INDUSTRIAL WAREHOUSE MANAGEMENT</div>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <button onClick={load} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 12px", color: C.muted, cursor: "pointer", fontSize: 13 }}>Refresh</button>
-            <div style={{ fontSize: 12, color: C.muted }}>{session.user.email}</div>
-            <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Sign Out</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={load} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Refresh</button>
+            <div style={{ fontSize: 11, color: C.muted, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user.email}</div>
+            <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Sign Out</button>
           </div>
         </div>
-        <div style={{ display: "flex" }}>
+        <div style={{ display: "flex", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
           {tabs.map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{ background: "transparent", border: "none", padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: tab === t ? C.accent : C.muted, borderBottom: `2px solid ${tab === t ? C.accent : "transparent"}` }}>{t}</button>
+            <button key={t} onClick={() => setTab(t)} style={{
+              background: "transparent", border: "none", padding: "10px 16px",
+              fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+              color: tab === t ? C.accent : C.muted,
+              borderBottom: `2px solid ${tab === t ? C.accent : "transparent"}`,
+            }}>{t}</button>
           ))}
         </div>
       </div>
-      <div style={{ padding: 28, maxWidth: 1280, margin: "0 auto" }}>
+
+      <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrorBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {tab === "Overview" && <Overview workOrders={workOrders} assets={assets} vendors={vendors} />}
         {tab === "Work Orders" && <WorkOrders workOrders={workOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} />}
@@ -494,3 +496,4 @@ export default function App() {
     </div>
   );
 }
+
