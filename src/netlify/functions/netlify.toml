@@ -1,10 +1,11 @@
+[build]
+  command = "vite build"
+  publish = "dist"
+
+[functions]
+  directory = "functions"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
-
-[functions]
-  directory = "netlify/functions"
-
-[[plugins]]
-  package = "@netlify/plugin-functions-install-core"
