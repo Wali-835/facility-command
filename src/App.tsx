@@ -8,6 +8,7 @@ const C = {
   text: "#e2e8f0", muted: "#64748b", subtle: "#94a3b8",
 };
 
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 const TODAY = new Date().toISOString().split("T")[0];
 const uid = (prefix) => `${prefix}-${Date.now().toString(36).toUpperCase()}`;
 const priorityColor = (p) => ({ Critical: C.red, High: C.accent, Medium: C.yellow, Low: C.green }[p] || C.muted);
@@ -33,7 +34,7 @@ const Input = ({ label, value, onChange, type = "text" }) => (
   </div>
 );
 
-const Select = ({ label, value, onChange, options }) => (
+const SelectInput = ({ label, value, onChange, options }) => (
   <div>
     <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
     <select value={value} onChange={e => onChange(e.target.value)}
@@ -43,14 +44,15 @@ const Select = ({ label, value, onChange, options }) => (
   </div>
 );
 
-const Btn = ({ children, onClick, variant, disabled }) => {
-  const isPrimary = variant !== "secondary";
+const Btn = ({ children, onClick, variant, disabled, color }) => {
+  const isPrimary = variant !== "secondary" && variant !== "danger";
+  const isDanger = variant === "danger";
   return (
     <button onClick={onClick} disabled={disabled} style={{
-      background: isPrimary ? C.accent : "transparent",
-      color: isPrimary ? "#fff" : C.muted,
-      border: isPrimary ? "none" : `1px solid ${C.border}`,
-      borderRadius: 6, padding: "10px 18px", fontSize: 14, fontWeight: 700,
+      background: isDanger ? C.red + "22" : isPrimary ? (color || C.accent) : "transparent",
+      color: isDanger ? C.red : isPrimary ? "#fff" : C.muted,
+      border: isDanger ? `1px solid ${C.red}44` : isPrimary ? "none" : `1px solid ${C.border}`,
+      borderRadius: 6, padding: "7px 14px", fontSize: 13, fontWeight: 700,
       cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
     }}>{children}</button>
   );
@@ -79,22 +81,64 @@ const ErrorBanner = ({ msg, onDismiss }) => msg ? (
   </div>
 ) : null;
 
-// ─── Inline Status Selector ───────────────────────────────────────────────────
 const StatusSelect = ({ value, options, onChange }) => (
-  <select
-    value={value}
-    onChange={e => onChange(e.target.value)}
-    style={{
-      background: statusColor(value) + "22",
-      color: statusColor(value),
-      border: `1px solid ${statusColor(value)}44`,
-      borderRadius: 4, padding: "3px 6px", fontSize: 11,
-      fontWeight: 700, cursor: "pointer", textTransform: "uppercase",
-      letterSpacing: "0.05em",
-    }}
-  >
+  <select value={value} onChange={e => onChange(e.target.value)} style={{
+    background: statusColor(value) + "22", color: statusColor(value),
+    border: `1px solid ${statusColor(value)}44`, borderRadius: 4,
+    padding: "3px 6px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+    textTransform: "uppercase", letterSpacing: "0.05em",
+  }}>
     {options.map(o => <option key={o} value={o}>{o}</option>)}
   </select>
+);
+
+// ─── EDIT MODAL ───────────────────────────────────────────────────────────────
+const EditModal = ({ title, fields, data, onSave, onClose }) => {
+  const [form, setForm] = useState({ ...data });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "#000000aa",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 1000, padding: 16,
+    }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 560 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.accent, marginBottom: 20, textTransform: "uppercase", letterSpacing: "0.08em" }}>Edit {title}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+          {fields.map(({ key, label, type, options }) =>
+            options ? (
+              <SelectInput key={key} label={label} value={form[key] || ""} onChange={f(key)} options={options} />
+            ) : (
+              <Input key={key} label={label} value={form[key] || ""} onChange={f(key)} type={type || "text"} />
+            )
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>
+          <Btn onClick={() => onSave(form)}>Save Changes</Btn>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── CONFIRM DELETE MODAL ─────────────────────────────────────────────────────
+const ConfirmDelete = ({ name, onConfirm, onClose }) => (
+  <div style={{
+    position: "fixed", inset: 0, background: "#000000aa",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    zIndex: 1000, padding: 16,
+  }}>
+    <div style={{ background: C.card, border: `1px solid ${C.red}44`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 400 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: C.red, marginBottom: 12 }}>Confirm Delete</div>
+      <div style={{ fontSize: 13, color: C.subtle, marginBottom: 20 }}>Are you sure you want to delete <strong style={{ color: C.text }}>{name}</strong>? This cannot be undone.</div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn variant="danger" onClick={onConfirm}>Delete</Btn>
+        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+      </div>
+    </div>
+  </div>
 );
 
 function LoginScreen() {
@@ -139,11 +183,13 @@ function LoginScreen() {
   );
 }
 
-function WorkOrders({ workOrders, setWorkOrders, loading, onAdd }) {
+function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("All");
+  const [editItem, setEditItem] = useState(null);
+  const [deleteItem, setDeleteItem] = useState(null);
   const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", due: "", vendor: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const filtered = filter === "All" ? workOrders : workOrders.filter(w => w.status === filter);
@@ -159,20 +205,46 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd }) {
 
   const updateStatus = async (id, newStatus) => {
     const { error: err } = await supabase.from("work_orders").update({ status: newStatus }).eq("id", id);
-    if (!err) {
-      setWorkOrders(prev => prev.map(wo => wo.id === id ? { ...wo, status: newStatus } : wo));
-    }
+    if (!err) setWorkOrders(prev => prev.map(wo => wo.id === id ? { ...wo, status: newStatus } : wo));
   };
 
   const updatePriority = async (id, newPriority) => {
     const { error: err } = await supabase.from("work_orders").update({ priority: newPriority }).eq("id", id);
-    if (!err) {
-      setWorkOrders(prev => prev.map(wo => wo.id === id ? { ...wo, priority: newPriority } : wo));
-    }
+    if (!err) setWorkOrders(prev => prev.map(wo => wo.id === id ? { ...wo, priority: newPriority } : wo));
+  };
+
+  const saveEdit = async (updated) => {
+    const { error: err } = await supabase.from("work_orders").update(updated).eq("id", updated.id);
+    if (!err) { setWorkOrders(prev => prev.map(wo => wo.id === updated.id ? updated : wo)); setEditItem(null); }
+    else setError(err.message);
+  };
+
+  const confirmDelete = async () => {
+    const { error: err } = await supabase.from("work_orders").delete().eq("id", deleteItem.id);
+    if (!err) { setWorkOrders(prev => prev.filter(wo => wo.id !== deleteItem.id)); setDeleteItem(null); }
+    else setError(err.message);
   };
 
   return (
     <div>
+      {editItem && (
+        <EditModal
+          title="Work Order"
+          data={editItem}
+          fields={[
+            { key: "title", label: "Title" },
+            { key: "asset", label: "Asset / Location" },
+            { key: "priority", label: "Priority", options: ["Critical", "High", "Medium", "Low"] },
+            { key: "status", label: "Status", options: ["Open", "In Progress", "Pending", "Completed"] },
+            { key: "vendor", label: "Vendor" },
+            { key: "due", label: "Due Date", type: "date" },
+            { key: "assignee", label: "Assignee" },
+          ]}
+          onSave={saveEdit}
+          onClose={() => setEditItem(null)}
+        />
+      )}
+      {deleteItem && <ConfirmDelete name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -189,7 +261,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd }) {
             <Input label="Title *" value={form.title} onChange={f("title")} />
             <Input label="Asset / Location *" value={form.asset} onChange={f("asset")} />
             <Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
-            <Select label="Priority" value={form.priority} onChange={f("priority")} options={["Critical", "High", "Medium", "Low"]} />
+            <SelectInput label="Priority" value={form.priority} onChange={f("priority")} options={["Critical", "High", "Medium", "Low"]} />
             <Input label="Vendor (optional)" value={form.vendor} onChange={f("vendor")} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
@@ -203,7 +275,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd }) {
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["ID", "Title", "Asset", "Priority", "Status", "Vendor", "Due"].map(h => (
+                {["ID", "Title", "Asset", "Priority", "Status", "Vendor", "Due", ...(isAdmin ? ["Actions"] : [])].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -215,24 +287,24 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd }) {
                   <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
                   <td style={{ padding: "10px 12px" }}>
-                    <StatusSelect
-                      value={wo.priority}
-                      options={["Critical", "High", "Medium", "Low"]}
-                      onChange={(val) => updatePriority(wo.id, val)}
-                    />
+                    <StatusSelect value={wo.priority} options={["Critical", "High", "Medium", "Low"]} onChange={(val) => updatePriority(wo.id, val)} />
                   </td>
                   <td style={{ padding: "10px 12px" }}>
-                    <StatusSelect
-                      value={wo.status}
-                      options={["Open", "In Progress", "Pending", "Completed"]}
-                      onChange={(val) => updateStatus(wo.id, val)}
-                    />
+                    <StatusSelect value={wo.status} options={["Open", "In Progress", "Pending", "Completed"]} onChange={(val) => updateStatus(wo.id, val)} />
                   </td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due && wo.due <= TODAY && wo.status !== "Completed" ? C.red : C.subtle }}>{wo.due || "—"}</td>
+                  {isAdmin && (
+                    <td style={{ padding: "10px 12px" }}>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <Btn onClick={() => setEditItem(wo)} color={C.blue}>Edit</Btn>
+                        <Btn variant="danger" onClick={() => setDeleteItem(wo)}>Delete</Btn>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={7} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -241,10 +313,12 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd }) {
   );
 }
 
-function Assets({ assets, setAssets, loading, onAdd }) {
+function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [editItem, setEditItem] = useState(null);
+  const [deleteItem, setDeleteItem] = useState(null);
   const [form, setForm] = useState({ name: "", category: "", location: "", value: "", next_service: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -259,13 +333,41 @@ function Assets({ assets, setAssets, loading, onAdd }) {
 
   const updateStatus = async (id, newStatus) => {
     const { error: err } = await supabase.from("assets").update({ status: newStatus }).eq("id", id);
-    if (!err) {
-      setAssets(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
-    }
+    if (!err) setAssets(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
+  };
+
+  const saveEdit = async (updated) => {
+    const { error: err } = await supabase.from("assets").update(updated).eq("id", updated.id);
+    if (!err) { setAssets(prev => prev.map(a => a.id === updated.id ? updated : a)); setEditItem(null); }
+    else setError(err.message);
+  };
+
+  const confirmDelete = async () => {
+    const { error: err } = await supabase.from("assets").delete().eq("id", deleteItem.id);
+    if (!err) { setAssets(prev => prev.filter(a => a.id !== deleteItem.id)); setDeleteItem(null); }
+    else setError(err.message);
   };
 
   return (
     <div>
+      {editItem && (
+        <EditModal
+          title="Asset"
+          data={editItem}
+          fields={[
+            { key: "name", label: "Asset Name" },
+            { key: "category", label: "Category" },
+            { key: "location", label: "Location / Zone" },
+            { key: "value", label: "Est. Value" },
+            { key: "status", label: "Status", options: ["Operational", "Under Maintenance", "Degraded"] },
+            { key: "last_service", label: "Last Service", type: "date" },
+            { key: "next_service", label: "Next Service", type: "date" },
+          ]}
+          onSave={saveEdit}
+          onClose={() => setEditItem(null)}
+        />
+      )}
+      {deleteItem && <ConfirmDelete name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}>
         <Btn onClick={() => setShowForm(v => !v)}>+ Add Asset</Btn>
@@ -295,11 +397,7 @@ function Assets({ assets, setAssets, loading, onAdd }) {
                   <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{a.name}</div>
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.id} · {a.category}</div>
                 </div>
-                <StatusSelect
-                  value={a.status}
-                  options={["Operational", "Under Maintenance", "Degraded"]}
-                  onChange={(val) => updateStatus(a.id, val)}
-                />
+                <StatusSelect value={a.status} options={["Operational", "Under Maintenance", "Degraded"]} onChange={(val) => updateStatus(a.id, val)} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
                 {[["Location", a.location], ["Value", a.value], ["Last Service", a.last_service], ["Next Service", a.next_service]].map(([lbl, val]) => (
@@ -309,6 +407,12 @@ function Assets({ assets, setAssets, loading, onAdd }) {
                   </div>
                 ))}
               </div>
+              {isAdmin && (
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  <Btn onClick={() => setEditItem(a)} color={C.blue}>Edit</Btn>
+                  <Btn variant="danger" onClick={() => setDeleteItem(a)}>Delete</Btn>
+                </div>
+              )}
             </div>
           ))}
           {assets.length === 0 && <div style={{ color: C.muted, fontSize: 13, padding: 32 }}>No assets registered yet.</div>}
@@ -318,10 +422,12 @@ function Assets({ assets, setAssets, loading, onAdd }) {
   );
 }
 
-function Vendors({ vendors, loading, onAdd }) {
+function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [editItem, setEditItem] = useState(null);
+  const [deleteItem, setDeleteItem] = useState(null);
   const [form, setForm] = useState({ name: "", specialty: "", contact: "", phone: "", email: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -334,6 +440,18 @@ function Vendors({ vendors, loading, onAdd }) {
     setSaving(false);
   };
 
+  const saveEdit = async (updated) => {
+    const { error: err } = await supabase.from("vendors").update(updated).eq("id", updated.id);
+    if (!err) { setVendors(prev => prev.map(v => v.id === updated.id ? updated : v)); setEditItem(null); }
+    else setError(err.message);
+  };
+
+  const confirmDelete = async () => {
+    const { error: err } = await supabase.from("vendors").delete().eq("id", deleteItem.id);
+    if (!err) { setVendors(prev => prev.filter(v => v.id !== deleteItem.id)); setDeleteItem(null); }
+    else setError(err.message);
+  };
+
   const Stars = ({ rating }) => (
     <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
       {[1, 2, 3, 4, 5].map(i => <span key={i} style={{ color: i <= Math.floor(rating) ? C.yellow : C.border, fontSize: 14 }}>*</span>)}
@@ -343,6 +461,24 @@ function Vendors({ vendors, loading, onAdd }) {
 
   return (
     <div>
+      {editItem && (
+        <EditModal
+          title="Vendor"
+          data={editItem}
+          fields={[
+            { key: "name", label: "Company Name" },
+            { key: "specialty", label: "Specialty" },
+            { key: "contact", label: "Contact Person" },
+            { key: "phone", label: "Phone" },
+            { key: "email", label: "Email" },
+            { key: "status", label: "Status", options: ["Active", "Inactive"] },
+            { key: "rating", label: "Rating (0-5)" },
+          ]}
+          onSave={saveEdit}
+          onClose={() => setEditItem(null)}
+        />
+      )}
+      {deleteItem && <ConfirmDelete name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}>
         <Btn onClick={() => setShowForm(v => !v)}>+ Add Vendor</Btn>
@@ -387,6 +523,12 @@ function Vendors({ vendors, loading, onAdd }) {
                   <div style={{ color: v.open_orders > 0 ? C.accent : C.subtle, marginTop: 2, fontWeight: v.open_orders > 0 ? 700 : 400 }}>{v.open_orders}</div>
                 </div>
               </div>
+              {isAdmin && (
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  <Btn onClick={() => setEditItem(v)} color={C.blue}>Edit</Btn>
+                  <Btn variant="danger" onClick={() => setDeleteItem(v)}>Delete</Btn>
+                </div>
+              )}
             </div>
           ))}
           {vendors.length === 0 && <div style={{ color: C.muted, fontSize: 13, padding: 32 }}>No vendors registered yet.</div>}
@@ -469,6 +611,8 @@ export default function App() {
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
 
+  const isAdmin = session?.user?.email === ADMIN_EMAIL;
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session); setAuthLoading(false);
@@ -520,7 +664,10 @@ export default function App() {
             <div style={{ background: C.accent, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🏭</div>
             <div>
               <div style={{ fontFamily: "monospace", fontSize: 16, letterSpacing: 2, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
-              <div style={{ fontSize: 9, color: C.muted, letterSpacing: "0.08em" }}>INDUSTRIAL WAREHOUSE MANAGEMENT</div>
+              <div style={{ fontSize: 9, color: C.muted, letterSpacing: "0.08em" }}>
+                INDUSTRIAL WAREHOUSE MANAGEMENT
+                {isAdmin && <span style={{ marginLeft: 8, color: C.accent }}>★ ADMIN</span>}
+              </div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -538,9 +685,9 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrorBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {tab === "Overview" && <Overview workOrders={workOrders} assets={assets} vendors={vendors} />}
-        {tab === "Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} />}
-        {tab === "Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r, ...p])} />}
-        {tab === "Vendors" && <Vendors vendors={vendors} loading={loading.vendors} onAdd={r => setVendors(p => [r, ...p])} />}
+        {tab === "Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} isAdmin={isAdmin} />}
+        {tab === "Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r, ...p])} isAdmin={isAdmin} />}
+        {tab === "Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r, ...p])} isAdmin={isAdmin} />}
       </div>
     </div>
   );
