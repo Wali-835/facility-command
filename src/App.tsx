@@ -8,6 +8,13 @@ const C = {
   text: "#e2e8f0", muted: "#64748b", subtle: "#94a3b8",
 };
 
+const SITES = [
+  "— Select Site —",
+  "Site1", "Site2", "Site3", "Site4", "Site5", "Site6",
+  "Site7B", "Site7C", "Site8", "Site9A", "Site9B",
+  "Site10A", "Site10B", "Site11", "Site12", "Site14A", "Site14B",
+];
+
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 const TODAY = new Date().toISOString().split("T")[0];
 const uid = (prefix) => `${prefix}-${Date.now().toString(36).toUpperCase()}`;
@@ -183,7 +190,6 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const filtered = filter === "All" ? workOrders : workOrders.filter(w => w.status === filter);
-
   const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
 
   const submit = async () => {
@@ -262,7 +268,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, letterSpacing: "0.08em", textTransform: "uppercase" }}>New Work Order</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label="Title *" value={form.title} onChange={f("title")} />
-            <Input label="Asset / Location *" value={form.asset} onChange={f("asset")} />
+            <Input label="Asset *" value={form.asset} onChange={f("asset")} />
             <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" />
             <Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
             <SelectInput label="Priority" value={form.priority} onChange={f("priority")} options={["Critical", "High", "Medium", "Low"]} />
@@ -324,15 +330,25 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
   const [error, setError] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null);
-  const [form, setForm] = useState({ name: "", category: "", location: "", value: "", next_service: "" });
+  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", next_service: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
   const submit = async () => {
     if (!form.name) { setError("Asset name is required."); return; }
+    if (form.location === "— Select Site —") { setError("Please select a site."); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, status: "Operational", last_service: TODAY, next_service: form.next_service || null };
+    const record = {
+      id: uid("AST"), name: form.name, category: form.category,
+      location: form.location, value: form.value,
+      status: "Operational", last_service: TODAY,
+      next_service: form.next_service || null,
+    };
     const { error: err } = await supabase.from("assets").insert([record]);
-    if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", category: "", location: "", value: "", next_service: "" }); setShowForm(false); }
+    if (err) { setError(err.message); } else {
+      onAdd(record);
+      setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "" });
+      setShowForm(false);
+    }
     setSaving(false);
   };
 
@@ -362,7 +378,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
           fields={[
             { key: "name", label: "Asset Name" },
             { key: "category", label: "Category" },
-            { key: "location", label: "Location / Zone" },
+            { key: "location", label: "Site / Location", options: SITES },
             { key: "value", label: "Est. Value" },
             { key: "status", label: "Status", options: ["Operational", "Under Maintenance", "Degraded"] },
             { key: "last_service", label: "Last Service", type: "date" },
@@ -383,7 +399,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label="Asset Name *" value={form.name} onChange={f("name")} />
             <Input label="Category" value={form.category} onChange={f("category")} />
-            <Input label="Location / Zone" value={form.location} onChange={f("location")} />
+            <SelectInput label="Site / Location *" value={form.location} onChange={f("location")} options={SITES} />
             <Input label="Est. Value" value={form.value} onChange={f("value")} />
             <Input label="Next Service Date" value={form.next_service} onChange={f("next_service")} type="date" />
           </div>
@@ -405,7 +421,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
                 <StatusSelect value={a.status} options={["Operational", "Under Maintenance", "Degraded"]} onChange={(val) => updateStatus(a.id, val)} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
-                {[["Location", a.location], ["Value", a.value], ["Last Service", a.last_service], ["Next Service", a.next_service]].map(([lbl, val]) => (
+                {[["Site", a.location], ["Value", a.value], ["Last Service", a.last_service], ["Next Service", a.next_service]].map(([lbl, val]) => (
                   <div key={lbl}>
                     <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{lbl}</div>
                     <div style={{ color: C.subtle, marginTop: 2 }}>{val || "—"}</div>
