@@ -92,18 +92,13 @@ const StatusSelect = ({ value, options, onChange }) => (
   </select>
 );
 
-// ─── EDIT MODAL ───────────────────────────────────────────────────────────────
 const EditModal = ({ title, fields, data, onSave, onClose }) => {
   const [form, setForm] = useState({ ...data });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "#000000aa",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      zIndex: 1000, padding: 16,
-    }}>
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 560 }}>
+    <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: C.accent, marginBottom: 20, textTransform: "uppercase", letterSpacing: "0.08em" }}>Edit {title}</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
           {fields.map(({ key, label, type, options }) =>
@@ -123,13 +118,8 @@ const EditModal = ({ title, fields, data, onSave, onClose }) => {
   );
 };
 
-// ─── CONFIRM DELETE MODAL ─────────────────────────────────────────────────────
 const ConfirmDelete = ({ name, onConfirm, onClose }) => (
-  <div style={{
-    position: "fixed", inset: 0, background: "#000000aa",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    zIndex: 1000, padding: 16,
-  }}>
+  <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
     <div style={{ background: C.card, border: `1px solid ${C.red}44`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 400 }}>
       <div style={{ fontSize: 15, fontWeight: 700, color: C.red, marginBottom: 12 }}>Confirm Delete</div>
       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 20 }}>Are you sure you want to delete <strong style={{ color: C.text }}>{name}</strong>? This cannot be undone.</div>
@@ -183,23 +173,35 @@ function LoginScreen() {
   );
 }
 
-function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
+function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("All");
   const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null);
-  const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", due: "", vendor: "" });
+  const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const filtered = filter === "All" ? workOrders : workOrders.filter(w => w.status === filter);
+
+  const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
 
   const submit = async () => {
     if (!form.title || !form.asset) { setError("Title and Asset are required."); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, priority: form.priority, status: "Open", assignee: null, due: form.due || null, vendor: form.vendor || null };
+    const record = {
+      id: uid("WO"), title: form.title, asset: form.asset,
+      priority: form.priority, status: "Open", assignee: null,
+      start_date: form.start_date || null,
+      due: form.due || null,
+      vendor: form.vendor === "— None —" ? null : form.vendor || null,
+    };
     const { error: err } = await supabase.from("work_orders").insert([record]);
-    if (err) { setError(err.message); } else { onAdd(record); setForm({ title: "", asset: "", priority: "Medium", due: "", vendor: "" }); setShowForm(false); }
+    if (err) { setError(err.message); } else {
+      onAdd(record);
+      setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
+      setShowForm(false);
+    }
     setSaving(false);
   };
 
@@ -236,9 +238,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
             { key: "asset", label: "Asset / Location" },
             { key: "priority", label: "Priority", options: ["Critical", "High", "Medium", "Low"] },
             { key: "status", label: "Status", options: ["Open", "In Progress", "Pending", "Completed"] },
-            { key: "vendor", label: "Vendor" },
-            { key: "due", label: "Due Date", type: "date" },
+            { key: "vendor", label: "Vendor", options: vendorOptions },
             { key: "assignee", label: "Assignee" },
+            { key: "start_date", label: "Start Date", type: "date" },
+            { key: "due", label: "Due Date", type: "date" },
           ]}
           onSave={saveEdit}
           onClose={() => setEditItem(null)}
@@ -260,9 +263,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label="Title *" value={form.title} onChange={f("title")} />
             <Input label="Asset / Location *" value={form.asset} onChange={f("asset")} />
+            <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" />
             <Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
             <SelectInput label="Priority" value={form.priority} onChange={f("priority")} options={["Critical", "High", "Medium", "Low"]} />
-            <Input label="Vendor (optional)" value={form.vendor} onChange={f("vendor")} />
+            <SelectInput label="Vendor" value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <Btn onClick={submit} disabled={saving}>{saving ? "Saving..." : "Create"}</Btn>
@@ -272,10 +276,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
       )}
       {loading ? <Spinner /> : (
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["ID", "Title", "Asset", "Priority", "Status", "Vendor", "Due", ...(isAdmin ? ["Actions"] : [])].map(h => (
+                {["ID", "Title", "Asset", "Priority", "Status", "Vendor", "Start", "Due", ...(isAdmin ? ["Actions"] : [])].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -293,6 +297,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
                     <StatusSelect value={wo.status} options={["Open", "In Progress", "Pending", "Completed"]} onChange={(val) => updateStatus(wo.id, val)} />
                   </td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor || "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.start_date || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due && wo.due <= TODAY && wo.status !== "Completed" ? C.red : C.subtle }}>{wo.due || "—"}</td>
                   {isAdmin && (
                     <td style={{ padding: "10px 12px" }}>
@@ -304,7 +309,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin }) {
                   )}
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={isAdmin ? 9 : 8} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -560,7 +565,7 @@ function Overview({ workOrders, assets, vendors }) {
             <div key={wo.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}22`, flexWrap: "wrap", gap: 6 }}>
               <div>
                 <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</div>
-                <div style={{ fontSize: 11, color: C.muted }}>{wo.asset}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{wo.asset} {wo.vendor ? `· ${wo.vendor}` : ""}</div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <Badge label={wo.priority} color={priorityColor(wo.priority)} />
@@ -685,7 +690,7 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrorBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {tab === "Overview" && <Overview workOrders={workOrders} assets={assets} vendors={vendors} />}
-        {tab === "Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} isAdmin={isAdmin} />}
+        {tab === "Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} isAdmin={isAdmin} vendors={vendors} />}
         {tab === "Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r, ...p])} isAdmin={isAdmin} />}
         {tab === "Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r, ...p])} isAdmin={isAdmin} />}
       </div>
