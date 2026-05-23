@@ -471,7 +471,77 @@ export default function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-</div>
+      setSession(session); setAuthLoading(false);
+    });
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session); setAuthLoading(false);
+    });
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading({ workOrders: true, assets: true, vendors: true });
+    const [woRes, astRes, vndRes] = await Promise.all([
+      supabase.from("work_orders").select("*").order("due", { ascending: true }),
+      supabase.from("assets").select("*").order("name", { ascending: true }),
+      supabase.from("vendors").select("*").order("name", { ascending: true }),
+    ]);
+    if (woRes.error || astRes.error || vndRes.error) {
+      setGlobalError("Failed to load data from Supabase.");
+    } else {
+      setWorkOrders(woRes.data || []);
+      setAssets(astRes.data || []);
+      setVendors(vndRes.data || []);
+    }
+    setLoading({ workOrders: false, assets: false, vendors: false });
+  }, []);
+
+  useEffect(() => { if (session) load(); }, [session, load]);
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+  };
+
+  if (authLoading) return (
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontFamily: "monospace" }}>
+      Loading...
+    </div>
+  );
+
+  if (!session) return <LoginScreen />;
+
+  const tabs = ["Overview", "Work Orders", "Assets", "Vendors"];
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif", color: C.text }}>
+      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 58, flexWrap: "wrap", gap: 8, padding: "8px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ background: C.accent, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🏭</div>
+            <div>
+              <div style={{ fontFamily: "monospace", fontSize: 16, letterSpacing: 2, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
+              <div style={{ fontSize: 9, color: C.muted, letterSpacing: "0.08em" }}>INDUSTRIAL WAREHOUSE MANAGEMENT</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={load} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Refresh</button>
+            <div style={{ fontSize: 11, color: C.muted, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user.email}</div>
+            <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Sign Out</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          {tabs.map(t => (
+            <button key={t} onClick={() => setTab(t)} style={{ background: "transparent", border: "none", padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", color: tab === t ? C.accent : C.muted, borderBottom: `2px solid ${tab === t ? C.accent : "transparent"}` }}>{t}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
+        <ErrorBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
+        {tab === "Overview" && <Overview workOrders={workOrders} assets={assets} vendors={vendors} />}
+        {tab === "Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} />}
+        {tab === "Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r, ...p])} />}
+        {tab === "Vendors" && <Vendors vendors={vendors} loading={loading.vendors} onAdd={r => setVendors(p => [r, ...p])} />}
+      </div>
     </div>
   );
 }
