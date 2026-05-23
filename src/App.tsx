@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "./supabase";
 
 const C = {
@@ -88,6 +89,13 @@ const ErrorBanner = ({ msg, onDismiss }) => msg ? (
   </div>
 ) : null;
 
+const SuccessBanner = ({ msg, onDismiss }) => msg ? (
+  <div style={{ background: C.green + "22", border: `1px solid ${C.green}44`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: C.green }}>
+    {msg}
+    <button onClick={onDismiss} style={{ background: "none", border: "none", color: C.green, cursor: "pointer", fontSize: 16 }}>x</button>
+  </div>
+) : null;
+
 const StatusSelect = ({ value, options, onChange }) => (
   <select value={value} onChange={e => onChange(e.target.value)} style={{
     background: statusColor(value) + "22", color: statusColor(value),
@@ -102,7 +110,6 @@ const StatusSelect = ({ value, options, onChange }) => (
 const EditModal = ({ title, fields, data, onSave, onClose }) => {
   const [form, setForm] = useState({ ...data });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
-
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }}>
@@ -180,6 +187,220 @@ function LoginScreen() {
   );
 }
 
+// ─── PM UPLOAD TAB ────────────────────────────────────────────────────────────
+function PMUpload({ onAssetsImported, onWorkOrdersGenerated, assets, workOrders }) {
+  const [uploading, setUploading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [preview, setPreview] = useState([]);
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const wb = XLSX.read(evt.target.result, { type: "binary" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws);
+      setPreview(data.slice(0, 5));
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handleImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws);
+
+        const records = data.map(row => ({
+          id: uid("AST"),
+          name: row["Asset Name"] || row["name"] || "",
+          category: row["Category"] || row["category"] || "",
+          location: row["Site"] || row["location"] || "",
+          value: row["Value"] ? String(row["Value"]) : "",
+          status: "Operational",
+          last_service: TODAY,
+          next_service: null,
+          pm_frequency: parseInt(row["PM Frequency (months)"] || row["pm_frequency"] || 1),
+          pm_task: row["PM Task"] || row["pm_task"] || "Scheduled Maintenance",
+          last_pm_date: null,
+        })).filter(r => r.name);
+
+        const { error: err } = await supabase.from("assets").insert(records);
+        if (err) { setError(err.message); }
+        else {
+          setSuccess(`Successfully imported ${records.length} assets!`);
+          onAssetsImported(records);
+        }
+      } catch (err) {
+        setError("Failed to parse Excel file. Please check the format.");
+      }
+      setUploading(false);
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const generatePMWorkOrders = async () => {
+    setGenerating(true);
+    setError(null);
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const assetsNeedingPM = assets.filter(a => {
+      if (!a.pm_frequency) return false;
+      if (!a.last_pm_date) return true;
+      const last = new Date(a.last_pm_date);
+      const monthsDiff = (currentYear - last.getFullYear()) * 12 + (currentMonth - last.getMonth());
+      return monthsDiff >= a.pm_frequency;
+    });
+
+    if (assetsNeedingPM.length === 0) {
+      setSuccess("No assets due for PM this month!");
+      setGenerating(false);
+      return;
+    }
+
+    const dueDate = new Date(currentYear, currentMonth + 1, 0).toISOString().split("T")[0];
+
+    const newWorkOrders = assetsNeedingPM.map(a => ({
+      id: uid("WO"),
+      title: `PM - ${a.name}`,
+      asset: a.name,
+      priority: "Medium",
+      status: "Open",
+      assignee: null,
+      start_date: TODAY,
+      due: dueDate,
+      vendor: null,
+    }));
+
+    const { error: err } = await supabase.from("work_orders").insert(newWorkOrders);
+    if (err) { setError(err.message); }
+    else {
+      await supabase.from("assets").update({ last_pm_date: TODAY })
+        .in("id", assetsNeedingPM.map(a => a.id));
+      setSuccess(`Generated ${newWorkOrders.length} PM work orders for this month!`);
+      onWorkOrdersGenerated(newWorkOrders);
+    }
+    setGenerating(false);
+  };
+
+  const pmDueCount = assets.filter(a => {
+    if (!a.pm_frequency) return false;
+    if (!a.last_pm_date) return true;
+    const now = new Date();
+    const last = new Date(a.last_pm_date);
+    const monthsDiff = (now.getFullYear() - last.getFullYear()) * 12 + (now.getMonth() - last.getMonth());
+    return monthsDiff >= a.pm_frequency;
+  }).length;
+
+  return (
+    <div>
+      <ErrorBanner msg={error} onDismiss={() => setError(null)} />
+      <SuccessBanner msg={success} onDismiss={() => setSuccess(null)} />
+
+      {/* PM Work Order Generation */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 24, marginBottom: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Generate PM Work Orders</div>
+        <div style={{ fontSize: 13, color: C.subtle, marginBottom: 16 }}>
+          Automatically create work orders for all assets due for preventive maintenance this month.
+        </div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
+          <div style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${C.accent}` }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{pmDueCount}</div>
+            <div style={{ fontSize: 12, color: C.muted }}>Assets due for PM</div>
+          </div>
+          <div style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${C.blue}` }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{assets.length}</div>
+            <div style={{ fontSize: 12, color: C.muted }}>Total assets</div>
+          </div>
+          <div style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${C.green}` }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{new Date().toLocaleString("default", { month: "long", year: "numeric" })}</div>
+            <div style={{ fontSize: 12, color: C.muted }}>Current month</div>
+          </div>
+        </div>
+        <Btn onClick={generatePMWorkOrders} disabled={generating || pmDueCount === 0}>
+          {generating ? "Generating..." : `Generate ${pmDueCount} PM Work Orders`}
+        </Btn>
+      </div>
+
+      {/* Excel Import */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 24 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Import Assets from Excel</div>
+        <div style={{ fontSize: 13, color: C.subtle, marginBottom: 16 }}>
+          Upload an Excel file to bulk import assets. Your file should have these columns:
+        </div>
+
+        {/* Column guide */}
+        <div style={{ background: C.surface, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+          <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10, fontWeight: 600 }}>Required Excel Columns</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+            {[
+              ["Asset Name", "Name of the asset"],
+              ["Site", "Location (e.g. Site1)"],
+              ["Category", "Type of asset"],
+              ["Value", "Asset value"],
+              ["PM Frequency (months)", "e.g. 1, 3, 6, 12"],
+              ["PM Task", "Description of PM task"],
+            ].map(([col, desc]) => (
+              <div key={col} style={{ background: C.card, borderRadius: 6, padding: "8px 12px" }}>
+                <div style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>{col}</div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Upload button */}
+        <label style={{
+          display: "inline-block", background: C.accent, color: "#fff",
+          borderRadius: 6, padding: "10px 20px", fontSize: 13, fontWeight: 700,
+          cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.7 : 1,
+        }}>
+          {uploading ? "Importing..." : "📂 Choose Excel File"}
+          <input type="file" accept=".xlsx,.xls" onChange={handleImport} style={{ display: "none" }} disabled={uploading} />
+        </label>
+
+        {/* Preview */}
+        {preview.length > 0 && (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.07em" }}>Preview (first 5 rows)</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {Object.keys(preview[0]).map(k => (
+                      <th key={k} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600 }}>{k}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.map((row, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                      {Object.values(row).map((val, j) => (
+                        <td key={j} style={{ padding: "6px 10px", color: C.subtle }}>{String(val)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -198,8 +419,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
     const record = {
       id: uid("WO"), title: form.title, asset: form.asset,
       priority: form.priority, status: "Open", assignee: null,
-      start_date: form.start_date || null,
-      due: form.due || null,
+      start_date: form.start_date || null, due: form.due || null,
       vendor: form.vendor === "— None —" ? null : form.vendor || null,
     };
     const { error: err } = await supabase.from("work_orders").insert([record]);
@@ -236,12 +456,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   return (
     <div>
       {editItem && (
-        <EditModal
-          title="Work Order"
-          data={editItem}
+        <EditModal title="Work Order" data={editItem}
           fields={[
             { key: "title", label: "Title" },
-            { key: "asset", label: "Asset / Location" },
+            { key: "asset", label: "Asset" },
             { key: "priority", label: "Priority", options: ["Critical", "High", "Medium", "Low"] },
             { key: "status", label: "Status", options: ["Open", "In Progress", "Pending", "Completed"] },
             { key: "vendor", label: "Vendor", options: vendorOptions },
@@ -249,9 +467,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
             { key: "start_date", label: "Start Date", type: "date" },
             { key: "due", label: "Due Date", type: "date" },
           ]}
-          onSave={saveEdit}
-          onClose={() => setEditItem(null)}
-        />
+          onSave={saveEdit} onClose={() => setEditItem(null)} />
       )}
       {deleteItem && <ConfirmDelete name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
@@ -296,12 +512,8 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
                   <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <StatusSelect value={wo.priority} options={["Critical", "High", "Medium", "Low"]} onChange={(val) => updatePriority(wo.id, val)} />
-                  </td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <StatusSelect value={wo.status} options={["Open", "In Progress", "Pending", "Completed"]} onChange={(val) => updateStatus(wo.id, val)} />
-                  </td>
+                  <td style={{ padding: "10px 12px" }}><StatusSelect value={wo.priority} options={["Critical", "High", "Medium", "Low"]} onChange={(val) => updatePriority(wo.id, val)} /></td>
+                  <td style={{ padding: "10px 12px" }}><StatusSelect value={wo.status} options={["Open", "In Progress", "Pending", "Completed"]} onChange={(val) => updateStatus(wo.id, val)} /></td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.start_date || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due && wo.due <= TODAY && wo.status !== "Completed" ? C.red : C.subtle }}>{wo.due || "—"}</td>
@@ -330,8 +542,11 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
   const [error, setError] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null);
-  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", next_service: "" });
+  const [siteFilter, setSiteFilter] = useState("All");
+  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  const filteredAssets = siteFilter === "All" ? assets : assets.filter(a => a.location === siteFilter);
 
   const submit = async () => {
     if (!form.name) { setError("Asset name is required."); return; }
@@ -342,11 +557,14 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
       location: form.location, value: form.value,
       status: "Operational", last_service: TODAY,
       next_service: form.next_service || null,
+      pm_frequency: parseInt(form.pm_frequency) || 1,
+      pm_task: form.pm_task || "Scheduled Maintenance",
+      last_pm_date: null,
     };
     const { error: err } = await supabase.from("assets").insert([record]);
     if (err) { setError(err.message); } else {
       onAdd(record);
-      setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "" });
+      setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" });
       setShowForm(false);
     }
     setSaving(false);
@@ -372,27 +590,34 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
   return (
     <div>
       {editItem && (
-        <EditModal
-          title="Asset"
-          data={editItem}
+        <EditModal title="Asset" data={editItem}
           fields={[
             { key: "name", label: "Asset Name" },
             { key: "category", label: "Category" },
             { key: "location", label: "Site / Location", options: SITES },
             { key: "value", label: "Est. Value" },
             { key: "status", label: "Status", options: ["Operational", "Under Maintenance", "Degraded"] },
+            { key: "pm_frequency", label: "PM Frequency (months)" },
+            { key: "pm_task", label: "PM Task Description" },
             { key: "last_service", label: "Last Service", type: "date" },
             { key: "next_service", label: "Next Service", type: "date" },
           ]}
-          onSave={saveEdit}
-          onClose={() => setEditItem(null)}
-        />
+          onSave={saveEdit} onClose={() => setEditItem(null)} />
       )}
       {deleteItem && <ConfirmDelete name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: C.muted }}>Filter by site:</span>
+          <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 12, cursor: "pointer" }}>
+            <option>All</option>
+            {SITES.filter(s => s !== "— Select Site —").map(s => <option key={s}>{s}</option>)}
+          </select>
+        </div>
         <Btn onClick={() => setShowForm(v => !v)}>+ Add Asset</Btn>
       </div>
+
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, letterSpacing: "0.08em", textTransform: "uppercase" }}>Register New Asset</div>
@@ -402,6 +627,8 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
             <SelectInput label="Site / Location *" value={form.location} onChange={f("location")} options={SITES} />
             <Input label="Est. Value" value={form.value} onChange={f("value")} />
             <Input label="Next Service Date" value={form.next_service} onChange={f("next_service")} type="date" />
+            <SelectInput label="PM Frequency (months)" value={form.pm_frequency} onChange={f("pm_frequency")} options={["1", "2", "3", "6", "12"]} />
+            <Input label="PM Task Description" value={form.pm_task} onChange={f("pm_task")} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <Btn onClick={submit} disabled={saving}>{saving ? "Saving..." : "Register"}</Btn>
@@ -409,34 +636,45 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin }) {
           </div>
         </div>
       )}
+
       {loading ? <Spinner /> : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-          {assets.map(a => (
-            <div key={a.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, borderTop: `3px solid ${statusColor(a.status)}` }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{a.name}</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.id} · {a.category}</div>
-                </div>
-                <StatusSelect value={a.status} options={["Operational", "Under Maintenance", "Degraded"]} onChange={(val) => updateStatus(a.id, val)} />
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
-                {[["Site", a.location], ["Value", a.value], ["Last Service", a.last_service], ["Next Service", a.next_service]].map(([lbl, val]) => (
-                  <div key={lbl}>
-                    <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{lbl}</div>
-                    <div style={{ color: C.subtle, marginTop: 2 }}>{val || "—"}</div>
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{filteredAssets.length} assets{siteFilter !== "All" ? ` in ${siteFilter}` : ""}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+            {filteredAssets.map(a => (
+              <div key={a.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, borderTop: `3px solid ${statusColor(a.status)}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{a.name}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.category}</div>
                   </div>
-                ))}
-              </div>
-              {isAdmin && (
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <Btn onClick={() => setEditItem(a)} color={C.blue}>Edit</Btn>
-                  <Btn variant="danger" onClick={() => setDeleteItem(a)}>Delete</Btn>
+                  <StatusSelect value={a.status} options={["Operational", "Under Maintenance", "Degraded"]} onChange={(val) => updateStatus(a.id, val)} />
                 </div>
-              )}
-            </div>
-          ))}
-          {assets.length === 0 && <div style={{ color: C.muted, fontSize: 13, padding: 32 }}>No assets registered yet.</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+                  {[
+                    ["Site", a.location],
+                    ["Value", a.value],
+                    ["PM Every", a.pm_frequency ? `${a.pm_frequency} month(s)` : "—"],
+                    ["Last PM", a.last_pm_date || "Never"],
+                    ["PM Task", a.pm_task],
+                    ["Next Service", a.next_service],
+                  ].map(([lbl, val]) => (
+                    <div key={lbl}>
+                      <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{lbl}</div>
+                      <div style={{ color: C.subtle, marginTop: 2 }}>{val || "—"}</div>
+                    </div>
+                  ))}
+                </div>
+                {isAdmin && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                    <Btn onClick={() => setEditItem(a)} color={C.blue}>Edit</Btn>
+                    <Btn variant="danger" onClick={() => setDeleteItem(a)}>Delete</Btn>
+                  </div>
+                )}
+              </div>
+            ))}
+            {filteredAssets.length === 0 && <div style={{ color: C.muted, fontSize: 13, padding: 32 }}>No assets found.</div>}
+          </div>
         </div>
       )}
     </div>
@@ -483,9 +721,7 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
   return (
     <div>
       {editItem && (
-        <EditModal
-          title="Vendor"
-          data={editItem}
+        <EditModal title="Vendor" data={editItem}
           fields={[
             { key: "name", label: "Company Name" },
             { key: "specialty", label: "Specialty" },
@@ -495,9 +731,7 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
             { key: "status", label: "Status", options: ["Active", "Inactive"] },
             { key: "rating", label: "Rating (0-5)" },
           ]}
-          onSave={saveEdit}
-          onClose={() => setEditItem(null)}
-        />
+          onSave={saveEdit} onClose={() => setEditItem(null)} />
       )}
       {deleteItem && <ConfirmDelete name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrorBanner msg={error} onDismiss={() => setError(null)} />
@@ -565,6 +799,14 @@ function Overview({ workOrders, assets, vendors }) {
   const opAssets = assets.filter(a => a.status === "Operational").length;
   const activeVendors = vendors.filter(v => v.status === "Active").length;
   const overdue = workOrders.filter(w => w.due && w.due <= TODAY && w.status !== "Completed").length;
+  const pmDue = assets.filter(a => {
+    if (!a.pm_frequency) return false;
+    if (!a.last_pm_date) return true;
+    const now = new Date();
+    const last = new Date(a.last_pm_date);
+    const monthsDiff = (now.getFullYear() - last.getFullYear()) * 12 + (now.getMonth() - last.getMonth());
+    return monthsDiff >= a.pm_frequency;
+  }).length;
 
   return (
     <div>
@@ -573,6 +815,7 @@ function Overview({ workOrders, assets, vendors }) {
         <StatCard icon="🏭" label="Operational Assets" value={`${opAssets}/${assets.length}`} sub="fleet status" color={C.green} />
         <StatCard icon="🤝" label="Active Vendors" value={activeVendors} sub="contractors on file" color={C.blue} />
         <StatCard icon="⚠️" label="Overdue / At Risk" value={overdue} sub="past due date" color={C.red} />
+        <StatCard icon="📋" label="PM Due This Month" value={pmDue} sub="preventive maintenance" color={C.yellow} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
@@ -608,14 +851,17 @@ function Overview({ workOrders, assets, vendors }) {
               </div>
             );
           })}
-          <div style={{ marginTop: 20, fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 10 }}>Top Vendors by Rating</div>
-          {[...vendors].filter(v => v.rating > 0).sort((a, b) => b.rating - a.rating).slice(0, 3).map(v => (
-            <div key={v.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 13, color: C.subtle }}>{v.name}</span>
-              <span style={{ fontSize: 13, color: C.yellow, fontWeight: 700 }}>* {Number(v.rating).toFixed(1)}</span>
-            </div>
-          ))}
-          {vendors.filter(v => v.rating > 0).length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No rated vendors yet.</div>}
+          <div style={{ marginTop: 16, fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 10 }}>Assets by Site</div>
+          {SITES.filter(s => s !== "— Select Site —").map(site => {
+            const count = assets.filter(a => a.location === site).length;
+            if (count === 0) return null;
+            return (
+              <div key={site} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}>
+                <span style={{ color: C.subtle }}>{site}</span>
+                <span style={{ color: C.text, fontWeight: 600 }}>{count}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -675,7 +921,7 @@ export default function App() {
 
   if (!session) return <LoginScreen />;
 
-  const tabs = ["Overview", "Work Orders", "Assets", "Vendors"];
+  const tabs = ["Overview", "Work Orders", "Assets", "Vendors", "PM Planner"];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif", color: C.text }}>
@@ -709,6 +955,14 @@ export default function App() {
         {tab === "Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r, ...p])} isAdmin={isAdmin} vendors={vendors} />}
         {tab === "Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r, ...p])} isAdmin={isAdmin} />}
         {tab === "Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r, ...p])} isAdmin={isAdmin} />}
+        {tab === "PM Planner" && (
+          <PMUpload
+            assets={assets}
+            workOrders={workOrders}
+            onAssetsImported={newAssets => setAssets(p => [...p, ...newAssets])}
+            onWorkOrdersGenerated={newWOs => setWorkOrders(p => [...newWOs, ...p])}
+          />
+        )}
       </div>
     </div>
   );
