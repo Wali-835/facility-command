@@ -213,7 +213,7 @@ function ChecklistModal({ asset, workOrderId, onClose }) {
     }
   };
 
-  const complete = async () => {
+const complete = async () => {
     if (!executionId) return;
     setSaving(true);
     const answered = Object.keys(responses).length;
@@ -222,8 +222,42 @@ function ChecklistModal({ asset, workOrderId, onClose }) {
       const unanswered = filtered.length - answered;
       if (!window.confirm(`${unanswered} items not yet answered. Complete anyway?`)) { setSaving(false); return; }
     }
+
+    // Mark checklist complete
     await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
-    setSuccess("Checklist completed successfully!");
+
+    // Build summary of results
+    const passCount = Object.values(responses).filter(r => r.result === "PASS").length;
+    const failCount = Object.values(responses).filter(r => r.result === "FAIL").length;
+    const naCount = Object.values(responses).filter(r => r.result === "N/A").length;
+
+    // Build defects list
+    const defects = items
+      .filter(i => responses[i.id]?.result === "FAIL")
+      .map(i => `- ${i.item_en}: ${responses[i.id]?.notes || "No notes"}`)
+      .join("\n");
+
+    const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects found:\n${defects}` : "\nNo defects found."}`;
+
+    // Auto-create maintenance log
+    const logRecord = {
+      id: uid("LOG"),
+      asset_id: asset.id,
+      asset_name: asset.name,
+      log_type: "Preventive Maintenance",
+      title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`,
+      description,
+      performed_by: executedBy,
+      vendor: null,
+      start_date: TODAY,
+      end_date: TODAY,
+      cost: null,
+      status: failCount > 0 ? "In Progress" : "Completed",
+    };
+
+    await supabase.from("maintenance_logs").insert([logRecord]);
+
+    setSuccess(`Checklist completed! ${failCount > 0 ? `⚠️ ${failCount} defect(s) found — log created as "In Progress".` : "✅ All clear — log added to maintenance history."}`);
     setSaving(false);
   };
 
