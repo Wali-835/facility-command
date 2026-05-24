@@ -480,9 +480,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
     const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: form.start_date || null, end_date: form.end_date || null, cost: form.cost ? parseFloat(form.cost) : null, status: form.status,
 downtime_start: form.downtime_start || null,
 downtime_end: form.downtime_end || null,
-downtime_hours: form.downtime_start && form.downtime_end
-  ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60))
-  : null,
+downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null,
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess("Log added!"); setLogs(prev => [record, ...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed" }); setShowForm(false); }
     setSaving(false);
