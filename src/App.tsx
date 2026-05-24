@@ -450,7 +450,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
   const [parts, setParts] = useState({});
   const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
 
-  const [form, setForm] = useState({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed" });
+  const [form, setForm] = useState({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" });
   const [partForm, setPartForm] = useState({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const pf = (k) => (v) => setPartForm(p => ({ ...p, [k]: v }));
@@ -477,7 +477,12 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
   const submitLog = async () => {
     if (!form.title) { setError("Title is required."); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: form.start_date || null, end_date: form.end_date || null, cost: form.cost ? parseFloat(form.cost) : null, status: form.status };
+    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: form.start_date || null, end_date: form.end_date || null, cost: form.cost ? parseFloat(form.cost) : null, status: form.status,
+downtime_start: form.downtime_start || null,
+downtime_end: form.downtime_end || null,
+downtime_hours: form.downtime_start && form.downtime_end
+  ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60))
+  : null,
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess("Log added!"); setLogs(prev => [record, ...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed" }); setShowForm(false); }
     setSaving(false);
@@ -557,7 +562,9 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
                   <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" />
                   <Input label="End Date" value={form.end_date} onChange={f("end_date")} type="date" />
                   <Input label="Total Cost ($)" value={form.cost} onChange={f("cost")} type="number" />
-                  <Sel label="Status" value={form.status} onChange={f("status")} options={LOG_STATUSES} />
+                <Sel label="Status" value={form.status} onChange={f("status")} options={LOG_STATUSES} />
+<Input label="Downtime Start" value={form.downtime_start} onChange={f("downtime_start")} type="date" />
+<Input label="Back to Operation" value={form.downtime_end} onChange={f("downtime_end")} type="date" />
                 </div>
                 <div style={{ marginTop: 12 }}><Textarea label="Description / Notes" value={form.description} onChange={f("description")} /></div>
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -593,7 +600,26 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
 
                     {expandedLog === log.id && (
                       <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
-                        {log.description && <div style={{ marginTop: 12, padding: 12, background: C.card, borderRadius: 8, fontSize: 13, color: C.subtle, lineHeight: 1.6 }}>{log.description}</div>}
+                        {log.description && <div style={{ marginTop: 14, padding: 12, background: C.card, borderRadius: 8, fontSize: 13, color: C.subtle, lineHeight: 1.6 }}>{log.description}</div>}
+{(log.downtime_start || log.downtime_end) && (
+  <div style={{ marginTop: 12, background: C.red+"11", border: `1px solid ${C.red}33`, borderRadius: 8, padding: "12px 16px", display: "flex", gap: 20, flexWrap: "wrap" }}>
+    <div>
+      <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>⛔ Equipment Down</div>
+      <div style={{ fontSize: 13, color: C.red, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_start) || "—"}</div>
+    </div>
+    <div style={{ fontSize: 20, color: C.muted, alignSelf: "center" }}>→</div>
+    <div>
+      <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>✅ Back to Operation</div>
+      <div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_end) || "Pending"}</div>
+    </div>
+    {log.downtime_hours && (
+      <div>
+        <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>⏱ Total Downtime</div>
+        <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700, marginTop: 2 }}>{log.downtime_hours} hours ({Math.round(log.downtime_hours/24)} days)</div>
+      </div>
+    )}
+  </div>
+)}
 
                         {/* Spare Parts */}
                         <div style={{ marginTop: 14 }}>
