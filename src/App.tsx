@@ -256,6 +256,23 @@ const complete = async () => {
     };
 
     await supabase.from("maintenance_logs").insert([logRecord]);
+  // Auto-close linked work order if exists
+if (workOrderId) {
+  await supabase.from("work_orders").update({ status: "Completed" }).eq("id", workOrderId);
+}
+
+// Also close any open PM work orders for this asset
+const { data: openWOs } = await supabase.from("work_orders")
+  .select("id")
+  .eq("asset", asset.name)
+  .in("status", ["Open", "In Progress", "Pending"])
+  .ilike("title", "PM - %");
+
+if (openWOs?.length) {
+  await supabase.from("work_orders")
+    .update({ status: "Completed" })
+    .in("id", openWOs.map(w => w.id));
+}
 
     setSuccess(`Checklist completed! ${failCount > 0 ? `⚠️ ${failCount} defect(s) found — log created as "In Progress".` : "✅ All clear — log added to maintenance history."}`);
     setSaving(false);
