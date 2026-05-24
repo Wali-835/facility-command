@@ -19,6 +19,7 @@ const LOG_STATUSES = ["Completed", "In Progress", "Pending", "Cancelled"];
 const FREQ_COLORS = { D: C.green, W: C.blue, F: C.purple, M: C.accent };
 const FREQ_LABELS = { D: "Daily", W: "Weekly", F: "Bi-weekly", M: "Monthly" };
 const CAT_ICONS = { Cleaning: "🧹", Inspection: "🔍", Lubrication: "🔧", Safety: "⚠️" };
+const SEVERITY_COLORS = { Critical: C.red, High: C.accent, Medium: C.yellow, Low: C.green };
 
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 const TODAY = new Date().toISOString().split("T")[0];
@@ -27,13 +28,15 @@ const priorityColor = (p) => ({ Critical: C.red, High: C.accent, Medium: C.yello
 const statusColor = (s) => ({
   Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow,
   Operational: C.green, "Under Maintenance": C.accent, Degraded: C.red,
-  Active: C.green, Inactive: C.muted, Cancelled: C.muted,
+  Active: C.green, Inactive: C.muted, Cancelled: C.muted, Acknowledged: C.blue, Resolved: C.green,
   "Preventive Maintenance": C.blue, "Corrective Repair": C.red,
   Inspection: C.yellow, Overhaul: C.purple, "Part Replacement": C.accent,
 }[s] || C.muted);
 
 const fmt = (n) => n ? `$${Number(n).toLocaleString()}` : "—";
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
+const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+const hoursBetween = (a, b) => a && b ? Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60)) : null;
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 const Badge = ({ label, color }) => (
@@ -48,10 +51,10 @@ const Input = ({ label, value, onChange, type="text", placeholder }) => (
   </div>
 );
 
-const Textarea = ({ label, value, onChange }) => (
+const Textarea = ({ label, value, onChange, placeholder }) => (
   <div>
     <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
-    <textarea value={value} onChange={e => onChange(e.target.value)} rows={3}
+    <textarea value={value} onChange={e => onChange(e.target.value)} rows={3} placeholder={placeholder}
       style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box", resize: "vertical" }} />
   </div>
 );
@@ -144,6 +147,298 @@ const ConfirmDel = ({ name, onConfirm, onClose }) => (
   </div>
 );
 
+// ─── BREAKDOWN REPORT MODAL (Operations User) ─────────────────────────────────
+function BreakdownReportModal({ asset, userRole, onClose, onReported }) {
+  const [form, setForm] = useState({ description: "", severity: "High", reported_by: userRole.name || "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  const submit = async () => {
+    if (!form.description) { setError("Please describe the breakdown."); return; }
+    if (!form.reported_by) { setError("Please enter your name."); return; }
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const record = {
+      id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location,
+      reported_by: form.reported_by, reported_at: now, downtime_start: now,
+      description: form.description, severity: form.severity, status: "Open",
+    };
+    const { error: err } = await supabase.from("breakdown_reports").insert([record]);
+    if (err) { setError(err.message); setSaving(false); return; }
+    // Update asset status to Under Maintenance
+    await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
+    onReported(record);
+    onClose();
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
+      <div style={{ background: C.card, border: `2px solid ${C.red}44`, borderRadius: 12, width: "100%", maxWidth: 500 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, background: C.red+"11" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.red }}>🚨 Report Breakdown</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{asset.name} · {asset.location}</div>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Input label="Reported By *" value={form.reported_by} onChange={f("reported_by")} placeholder="Your full name" />
+            <Sel label="Severity" value={form.severity} onChange={f("severity")} options={["Critical", "High", "Medium", "Low"]} />
+            <Textarea label="Breakdown Description *" value={form.description} onChange={f("description")} placeholder="Describe what happened, any error messages, sounds, etc..." />
+            <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, fontSize: 12, color: C.yellow }}>
+              ⏱ Downtime will start from: <strong>{new Date().toLocaleString("en-GB")}</strong>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+            <Btn onClick={submit} disabled={saving} color={C.red}>{saving ? "Reporting..." : "🚨 Report Breakdown"}</Btn>
+            <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── BREAKDOWN RESOLUTION MODAL (Maintenance User) ────────────────────────────
+function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolved }) {
+  const [form, setForm] = useState({ resolved_by: userRole.name || "", maintenance_notes: "", vendor: "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+  const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
+
+  const downtimeHours = hoursBetween(breakdown.downtime_start, new Date().toISOString());
+
+  const submit = async () => {
+    if (!form.resolved_by) { setError("Please enter your name."); return; }
+    if (!form.maintenance_notes) { setError("Please add maintenance notes."); return; }
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const hours = hoursBetween(breakdown.downtime_start, now);
+
+    // Update breakdown report
+    await supabase.from("breakdown_reports").update({
+      status: "Resolved", resolved_by: form.resolved_by, resolved_at: now,
+      downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes,
+    }).eq("id", breakdown.id);
+
+    // Update asset status back to Operational
+    await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
+
+    // Auto-create maintenance log
+    const logRecord = {
+      id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name,
+      log_type: "Corrective Repair",
+      title: `Breakdown Repair — ${breakdown.severity} severity`,
+      description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`,
+      performed_by: form.resolved_by,
+      vendor: form.vendor === "— None —" ? null : form.vendor || null,
+      start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY,
+      end_date: TODAY, cost: null, status: "Completed",
+      downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null,
+      downtime_end: TODAY,
+      downtime_hours: hours,
+    };
+    await supabase.from("maintenance_logs").insert([logRecord]);
+
+    // Close any open work orders for this asset
+    const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", breakdown.asset_name).in("status", ["Open", "In Progress", "Pending"]);
+    if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
+
+    onResolved({ ...breakdown, status: "Resolved", downtime_end: now, downtime_hours: hours });
+    onClose();
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
+      <div style={{ background: C.card, border: `2px solid ${C.green}44`, borderRadius: 12, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, background: C.green+"11" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.green }}>✅ Resolve Breakdown</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{breakdown.asset_name} · {breakdown.site}</div>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          {/* Breakdown info */}
+          <div style={{ background: C.red+"11", border: `1px solid ${C.red}33`, borderRadius: 8, padding: 14, marginBottom: 18 }}>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, textTransform: "uppercase", fontWeight: 600 }}>Breakdown Details</div>
+            <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Reported by:</strong> {breakdown.reported_by}</div>
+            <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Reported at:</strong> {fmtDateTime(breakdown.reported_at)}</div>
+            <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Issue:</strong> {breakdown.description}</div>
+            <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700 }}>⏱ Current downtime: {downtimeHours} hours</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Input label="Resolved By (Technician) *" value={form.resolved_by} onChange={f("resolved_by")} placeholder="Your full name" />
+            <Sel label="Vendor / Contractor Used" value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
+            <Textarea label="Maintenance Notes *" value={form.maintenance_notes} onChange={f("maintenance_notes")} placeholder="What was the root cause? What was done to fix it? Parts replaced?" />
+            <div style={{ background: C.green+"11", border: `1px solid ${C.green}44`, borderRadius: 8, padding: 12, fontSize: 12, color: C.green }}>
+              ✅ Equipment will be marked as <strong>Operational</strong> and downtime end will be set to: <strong>{new Date().toLocaleString("en-GB")}</strong>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+            <Btn onClick={submit} disabled={saving} color={C.green}>{saving ? "Resolving..." : "✅ Mark as Resolved"}</Btn>
+            <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
+function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders }) {
+  const [breakdowns, setBreakdowns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [showReportForm, setShowReportForm] = useState(false);
+  const [resolveItem, setResolveItem] = useState(null);
+  const [filter, setFilter] = useState("Open");
+  const [selectedAsset, setSelectedAsset] = useState(null);
+
+  useEffect(() => { loadBreakdowns(); }, []);
+
+  const loadBreakdowns = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("breakdown_reports").select("*").order("reported_at", { ascending: false });
+    setBreakdowns(data || []);
+    setLoading(false);
+  };
+
+  const filtered = filter === "All" ? breakdowns : breakdowns.filter(b => b.status === filter);
+  const openCount = breakdowns.filter(b => b.status === "Open").length;
+  const resolvedCount = breakdowns.filter(b => b.status === "Resolved").length;
+  const totalDowntime = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + b.downtime_hours, 0);
+
+  const onReported = (record) => {
+    setBreakdowns(prev => [record, ...prev]);
+    setAssets(prev => prev.map(a => a.id === record.asset_id ? { ...a, status: "Under Maintenance" } : a));
+    setSuccess("Breakdown reported! Maintenance team has been notified.");
+  };
+
+  const onResolved = (updated) => {
+    setBreakdowns(prev => prev.map(b => b.id === updated.id ? updated : b));
+    setAssets(prev => prev.map(a => a.id === updated.asset_id ? { ...a, status: "Operational" } : a));
+    setSuccess("Breakdown resolved! Equipment is back to operation. Maintenance log created automatically.");
+  };
+
+  return (
+    <div>
+      {showReportForm && selectedAsset && (
+        <BreakdownReportModal asset={selectedAsset} userRole={userRole} onClose={() => { setShowReportForm(false); setSelectedAsset(null); }} onReported={onReported} />
+      )}
+      {resolveItem && (
+        <BreakdownResolveModal breakdown={resolveItem} userRole={userRole} vendors={vendors} onClose={() => setResolveItem(null)} onResolved={onResolved} />
+      )}
+
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
+        <StatCard icon="🚨" label="Open Breakdowns" value={openCount} sub="needs attention" color={C.red} />
+        <StatCard icon="✅" label="Resolved" value={resolvedCount} sub="this period" color={C.green} />
+        <StatCard icon="⏱" label="Total Downtime" value={`${totalDowntime}h`} sub="all breakdowns" color={C.yellow} />
+        <StatCard icon="🏭" label="Assets Down" value={assets.filter(a => a.status === "Under Maintenance").length} sub="currently offline" color={C.accent} />
+      </div>
+
+      {/* Report Breakdown Button (Operations & Admin) */}
+      {(userRole.role === "operations" || userRole.role === "admin") && (
+        <div style={{ background: C.card, border: `1px solid ${C.red}33`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🚨 Report Equipment Breakdown</div>
+          <div style={{ fontSize: 13, color: C.subtle, marginBottom: 14 }}>Select the equipment that broke down to report it to the maintenance team.</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <select onChange={e => setSelectedAsset(assets.find(a => a.id === e.target.value) || null)}
+              style={{ flex: 1, minWidth: 200, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
+              <option value="">— Select Equipment —</option>
+              {assets.filter(a => a.status !== "Under Maintenance").map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
+            </select>
+            <Btn onClick={() => { if (!selectedAsset) { setError("Please select an equipment first."); return; } setShowReportForm(true); }} color={C.red}>
+              🚨 Report Breakdown
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {/* Filter */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["All", "Open", "Acknowledged", "Resolved"].map(s => (
+            <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{s}</button>
+          ))}
+        </div>
+        <button onClick={loadBreakdowns} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↻ Refresh</button>
+      </div>
+
+      {/* Breakdown List */}
+      {loading ? <Spinner /> : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>No breakdowns found.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {filtered.map(b => {
+            const isResolved = b.status === "Resolved";
+            const currentDowntime = isResolved ? b.downtime_hours : hoursBetween(b.downtime_start, new Date().toISOString());
+            return (
+              <div key={b.id} style={{ background: C.card, border: `1px solid ${isResolved ? C.green+"44" : C.red+"44"}`, borderRadius: 10, padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 18 }}>{isResolved ? "✅" : "🚨"}</span>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{b.asset_name}</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted }}>{b.site} · Reported by {b.reported_by} · {fmtDateTime(b.reported_at)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <Badge label={b.severity} color={SEVERITY_COLORS[b.severity] || C.muted} />
+                    <Badge label={b.status} color={statusColor(b.status)} />
+                  </div>
+                </div>
+
+                {/* Downtime Timeline */}
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ background: C.red+"11", border: `1px solid ${C.red}33`, borderRadius: 8, padding: "10px 16px", flex: "1 1 160px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>⛔ Downtime Started</div>
+                    <div style={{ fontSize: 13, color: C.red, fontWeight: 700 }}>{fmtDateTime(b.downtime_start)}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", color: C.muted, fontSize: 20 }}>→</div>
+                  <div style={{ background: isResolved ? C.green+"11" : C.yellow+"11", border: `1px solid ${isResolved ? C.green+"33" : C.yellow+"33"}`, borderRadius: 8, padding: "10px 16px", flex: "1 1 160px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>{isResolved ? "✅ Back to Operation" : "⏳ Still Down"}</div>
+                    <div style={{ fontSize: 13, color: isResolved ? C.green : C.yellow, fontWeight: 700 }}>{isResolved ? fmtDateTime(b.downtime_end) : "In Progress..."}</div>
+                  </div>
+                  <div style={{ background: C.purple+"11", border: `1px solid ${C.purple}33`, borderRadius: 8, padding: "10px 16px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>⏱ Downtime</div>
+                    <div style={{ fontSize: 13, color: C.purple, fontWeight: 700 }}>{currentDowntime}h ({Math.round(currentDowntime/24)}d)</div>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: C.subtle }}>
+                  <strong style={{ color: C.text }}>Issue:</strong> {b.description}
+                </div>
+
+                {/* Resolution notes */}
+                {isResolved && b.maintenance_notes && (
+                  <div style={{ background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: C.subtle }}>
+                    <strong style={{ color: C.green }}>✅ Resolved by {b.resolved_by}:</strong> {b.maintenance_notes}
+                  </div>
+                )}
+
+                {/* Actions */}
+                {!isResolved && (userRole.role === "maintenance" || userRole.role === "admin") && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn onClick={() => setResolveItem(b)} color={C.green}>✅ Mark as Resolved</Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── CIL CHECKLIST MODAL ─────────────────────────────────────────────────────
 function ChecklistModal({ asset, workOrderId, onClose }) {
   const [items, setItems] = useState([]);
@@ -162,17 +457,10 @@ function ChecklistModal({ asset, workOrderId, onClose }) {
     setLoading(true);
     const { data: checklists } = await supabase.from("checklists").select("id").limit(1);
     if (!checklists?.length) { setLoading(false); return; }
-    const checklistId = checklists[0].id;
-    const { data: checkItems } = await supabase.from("checklist_items").select("*")
-      .eq("checklist_id", checklistId).order("item_number");
+    const { data: checkItems } = await supabase.from("checklist_items").select("*").eq("checklist_id", checklists[0].id).order("item_number");
     setItems(checkItems || []);
-
-    // Check existing execution for this asset this month
     const now = new Date();
-    const { data: existing } = await supabase.from("checklist_executions").select("*")
-      .eq("asset_id", asset.id).eq("month", now.getMonth() + 1).eq("year", now.getFullYear())
-      .limit(1);
-
+    const { data: existing } = await supabase.from("checklist_executions").select("*").eq("asset_id", asset.id).eq("month", now.getMonth()+1).eq("year", now.getFullYear()).limit(1);
     if (existing?.length) {
       setExecutionId(existing[0].id);
       setExecutedBy(existing[0].executed_by || "");
@@ -189,18 +477,11 @@ function ChecklistModal({ asset, workOrderId, onClose }) {
     const now = new Date();
     const execId = uid("EXC");
     const { data: checklists } = await supabase.from("checklists").select("id").limit(1);
-    const record = {
-      id: execId, checklist_id: checklists[0].id,
-      asset_id: asset.id, asset_name: asset.name,
-      work_order_id: workOrderId || null,
-      executed_by: executedBy, execution_date: TODAY,
-      month: now.getMonth() + 1, year: now.getFullYear(), status: "In Progress",
-    };
-    await supabase.from("checklist_executions").insert([record]);
+    await supabase.from("checklist_executions").insert([{ id: execId, checklist_id: checklists[0].id, asset_id: asset.id, asset_name: asset.name, work_order_id: workOrderId || null, executed_by: executedBy, execution_date: TODAY, month: now.getMonth()+1, year: now.getFullYear(), status: "In Progress" }]);
     setExecutionId(execId);
   };
 
-  const setResponse = async (itemId, result, notes = "") => {
+  const setResponse = async (itemId, result, notes="") => {
     if (!executionId) return;
     const existing = responses[itemId];
     if (existing) {
@@ -213,81 +494,37 @@ function ChecklistModal({ asset, workOrderId, onClose }) {
     }
   };
 
-const complete = async () => {
+  const complete = async () => {
     if (!executionId) return;
     setSaving(true);
-    const answered = Object.keys(responses).length;
     const filtered = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
+    const answered = Object.keys(responses).length;
     if (answered < filtered.length) {
-      const unanswered = filtered.length - answered;
-      if (!window.confirm(`${unanswered} items not yet answered. Complete anyway?`)) { setSaving(false); return; }
+      if (!window.confirm(`${filtered.length - answered} items not yet answered. Complete anyway?`)) { setSaving(false); return; }
     }
-
-    // Mark checklist complete
     await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
-
-    // Build summary of results
-    const passCount = Object.values(responses).filter(r => r.result === "PASS").length;
-    const failCount = Object.values(responses).filter(r => r.result === "FAIL").length;
-    const naCount = Object.values(responses).filter(r => r.result === "N/A").length;
-
-    // Build defects list
-    const defects = items
-      .filter(i => responses[i.id]?.result === "FAIL")
-      .map(i => `- ${i.item_en}: ${responses[i.id]?.notes || "No notes"}`)
-      .join("\n");
-
+    const passCount = Object.values(responses).filter(r => r.result==="PASS").length;
+    const failCount = Object.values(responses).filter(r => r.result==="FAIL").length;
+    const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
+    const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
     const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects found:\n${defects}` : "\nNo defects found."}`;
-
-    // Auto-create maintenance log
-    const logRecord = {
-      id: uid("LOG"),
-      asset_id: asset.id,
-      asset_name: asset.name,
-      log_type: "Preventive Maintenance",
-      title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`,
-      description,
-      performed_by: executedBy,
-      vendor: null,
-      start_date: TODAY,
-      end_date: TODAY,
-      cost: null,
-      status: failCount > 0 ? "In Progress" : "Completed",
-    };
-
+    const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: failCount > 0 ? "In Progress" : "Completed", downtime_start: null, downtime_end: null, downtime_hours: null };
     await supabase.from("maintenance_logs").insert([logRecord]);
-  // Auto-close linked work order if exists
-if (workOrderId) {
-  await supabase.from("work_orders").update({ status: "Completed" }).eq("id", workOrderId);
-}
-
-// Also close any open PM work orders for this asset
-const { data: openWOs } = await supabase.from("work_orders")
-  .select("id")
-  .eq("asset", asset.name)
-  .in("status", ["Open", "In Progress", "Pending"])
-  .ilike("title", "PM - %");
-
-if (openWOs?.length) {
-  await supabase.from("work_orders")
-    .update({ status: "Completed" })
-    .in("id", openWOs.map(w => w.id));
-}
-
-    setSuccess(`Checklist completed! ${failCount > 0 ? `⚠️ ${failCount} defect(s) found — log created as "In Progress".` : "✅ All clear — log added to maintenance history."}`);
+    if (workOrderId) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", workOrderId);
+    const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", asset.name).in("status", ["Open","In Progress","Pending"]).ilike("title","PM - %");
+    if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
+    setSuccess(`Checklist completed! ${failCount > 0 ? `⚠️ ${failCount} defect(s) found.` : "✅ All clear — log added to maintenance history."}`);
     setSaving(false);
   };
 
   const filteredItems = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
   const answeredCount = filteredItems.filter(i => responses[i.id]).length;
-  const failCount = filteredItems.filter(i => responses[i.id]?.result === "FAIL").length;
-  const passCount = filteredItems.filter(i => responses[i.id]?.result === "PASS").length;
+  const failCount = filteredItems.filter(i => responses[i.id]?.result==="FAIL").length;
+  const passCount = filteredItems.filter(i => responses[i.id]?.result==="PASS").length;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 2000, padding: 16, overflowY: "auto" }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 860, marginTop: 20, marginBottom: 20 }}>
-
-        {/* Header */}
         <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>CIL Checklist — {asset.name}</div>
@@ -295,8 +532,6 @@ if (openWOs?.length) {
           </div>
           <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
         </div>
-
-        {/* Progress */}
         <div style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.muted, marginBottom: 6 }}>
@@ -307,58 +542,40 @@ if (openWOs?.length) {
               <div style={{ background: failCount > 0 ? C.accent : C.green, width: `${filteredItems.length > 0 ? (answeredCount/filteredItems.length)*100 : 0}%`, height: 8, borderRadius: 4, transition: "width 0.3s" }} />
             </div>
           </div>
-          {/* Frequency Filter */}
           <div style={{ display: "flex", gap: 6 }}>
-            {["All", "D", "W", "F", "M"].map(f => (
-              <button key={f} onClick={() => setFilterFreq(f)} style={{
-                background: filterFreq === f ? (FREQ_COLORS[f] || C.accent) : C.surface,
-                color: filterFreq === f ? "#fff" : C.muted,
-                border: `1px solid ${filterFreq === f ? (FREQ_COLORS[f] || C.accent) : C.border}`,
-                borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer",
-              }}>{f === "All" ? "All" : FREQ_LABELS[f]}</button>
+            {["All","D","W","F","M"].map(f => (
+              <button key={f} onClick={() => setFilterFreq(f)} style={{ background: filterFreq===f?(FREQ_COLORS[f]||C.accent):C.surface, color: filterFreq===f?"#fff":C.muted, border: `1px solid ${filterFreq===f?(FREQ_COLORS[f]||C.accent):C.border}`, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{f==="All"?"All":FREQ_LABELS[f]}</button>
             ))}
           </div>
         </div>
-
         <div style={{ padding: 24 }}>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
           <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
-
-          {/* Start form */}
           {!executionId && (
             <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: C.accent, fontWeight: 700, marginBottom: 12, textTransform: "uppercase" }}>Start Checklist</div>
               <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <Input label="Technician Name *" value={executedBy} onChange={setExecutedBy} />
-                </div>
+                <div style={{ flex: 1, minWidth: 200 }}><Input label="Technician Name *" value={executedBy} onChange={setExecutedBy} /></div>
                 <Btn onClick={startExecution}>Start</Btn>
               </div>
             </div>
           )}
-
           {loading ? <Spinner /> : (
             <div>
-              {/* Group by category */}
-              {["Cleaning", "Safety", "Inspection", "Lubrication"].map(cat => {
-                const catItems = filteredItems.filter(i => i.category === cat);
+              {["Cleaning","Safety","Inspection","Lubrication"].map(cat => {
+                const catItems = filteredItems.filter(i => i.category===cat);
                 if (!catItems.length) return null;
                 return (
                   <div key={cat} style={{ marginBottom: 24 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                      <span>{CAT_ICONS[cat]}</span> {cat}
-                      <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>({catItems.length} items)</span>
+                      <span>{CAT_ICONS[cat]}</span> {cat} <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>({catItems.length} items)</span>
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       {catItems.map(item => {
                         const resp = responses[item.id];
                         const result = resp?.result;
                         return (
-                          <div key={item.id} style={{
-                            background: result === "PASS" ? C.green+"11" : result === "FAIL" ? C.red+"11" : C.surface,
-                            border: `1px solid ${result === "PASS" ? C.green+"44" : result === "FAIL" ? C.red+"44" : C.border}`,
-                            borderRadius: 8, padding: "12px 16px",
-                          }}>
+                          <div key={item.id} style={{ background: result==="PASS"?C.green+"11":result==="FAIL"?C.red+"11":C.surface, border: `1px solid ${result==="PASS"?C.green+"44":result==="FAIL"?C.red+"44":C.border}`, borderRadius: 8, padding: "12px 16px" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                               <div style={{ flex: 1 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -371,40 +588,16 @@ if (openWOs?.length) {
                               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                 {executionId ? (
                                   <>
-                                    <button onClick={() => setResponse(item.id, "PASS")} style={{
-                                      background: result === "PASS" ? C.green : "transparent",
-                                      color: result === "PASS" ? "#fff" : C.green,
-                                      border: `2px solid ${C.green}`, borderRadius: 6,
-                                      padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                                    }}>✓ PASS</button>
-                                    <button onClick={() => setResponse(item.id, "FAIL")} style={{
-                                      background: result === "FAIL" ? C.red : "transparent",
-                                      color: result === "FAIL" ? "#fff" : C.red,
-                                      border: `2px solid ${C.red}`, borderRadius: 6,
-                                      padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                                    }}>✗ FAIL</button>
-                                    <button onClick={() => setResponse(item.id, "N/A")} style={{
-                                      background: result === "N/A" ? C.muted : "transparent",
-                                      color: result === "N/A" ? "#fff" : C.muted,
-                                      border: `2px solid ${C.muted}44`, borderRadius: 6,
-                                      padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                                    }}>N/A</button>
+                                    <button onClick={() => setResponse(item.id,"PASS")} style={{ background: result==="PASS"?C.green:"transparent", color: result==="PASS"?"#fff":C.green, border: `2px solid ${C.green}`, borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ PASS</button>
+                                    <button onClick={() => setResponse(item.id,"FAIL")} style={{ background: result==="FAIL"?C.red:"transparent", color: result==="FAIL"?"#fff":C.red, border: `2px solid ${C.red}`, borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✗ FAIL</button>
+                                    <button onClick={() => setResponse(item.id,"N/A")} style={{ background: result==="N/A"?C.muted:"transparent", color: result==="N/A"?"#fff":C.muted, border: `2px solid ${C.muted}44`, borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>N/A</button>
                                   </>
-                                ) : (
-                                  <span style={{ fontSize: 12, color: C.muted }}>Start checklist to respond</span>
-                                )}
+                                ) : <span style={{ fontSize: 12, color: C.muted }}>Start checklist to respond</span>}
                               </div>
                             </div>
-                            {/* Notes for FAIL */}
-                            {result === "FAIL" && executionId && (
+                            {result==="FAIL" && executionId && (
                               <div style={{ marginTop: 10 }}>
-                                <textarea
-                                  placeholder="Describe the issue / defect..."
-                                  value={resp?.notes || ""}
-                                  onChange={e => setResponse(item.id, "FAIL", e.target.value)}
-                                  rows={2}
-                                  style={{ width: "100%", background: C.card, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 13, boxSizing: "border-box", resize: "vertical" }}
-                                />
+                                <textarea placeholder="Describe the issue / defect..." value={resp?.notes||""} onChange={e => setResponse(item.id,"FAIL",e.target.value)} rows={2} style={{ width: "100%", background: C.card, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 13, boxSizing: "border-box", resize: "vertical" }} />
                               </div>
                             )}
                           </div>
@@ -414,18 +607,10 @@ if (openWOs?.length) {
                   </div>
                 );
               })}
-
-              {/* Complete Button */}
               {executionId && (
                 <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  {failCount > 0 && (
-                    <div style={{ fontSize: 13, color: C.red, display: "flex", alignItems: "center", gap: 6 }}>
-                      ⚠️ {failCount} item(s) FAILED — please add notes
-                    </div>
-                  )}
-                  <Btn onClick={complete} disabled={saving} color={C.green}>
-                    {saving ? "Completing..." : "✓ Complete Checklist"}
-                  </Btn>
+                  {failCount > 0 && <div style={{ fontSize: 13, color: C.red, display: "flex", alignItems: "center", gap: 6 }}>⚠️ {failCount} item(s) FAILED</div>}
+                  <Btn onClick={complete} disabled={saving} color={C.green}>{saving ? "Completing..." : "✓ Complete Checklist"}</Btn>
                 </div>
               )}
             </div>
@@ -448,8 +633,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
   const [saving, setSaving] = useState(false);
   const [expandedLog, setExpandedLog] = useState(null);
   const [parts, setParts] = useState({});
-  const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
-
+  const vendorOptions = ["— None —", ...vendors.filter(v => v.status==="Active").map(v => v.name)];
   const [form, setForm] = useState({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" });
   const [partForm, setPartForm] = useState({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
@@ -470,86 +654,62 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
   };
 
   const toggleLog = (logId) => {
-    setExpandedLog(expandedLog === logId ? null : logId);
+    setExpandedLog(expandedLog===logId ? null : logId);
     if (!parts[logId]) loadParts(logId);
   };
 
   const submitLog = async () => {
     if (!form.title) { setError("Title is required."); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: form.start_date || null, end_date: form.end_date || null, cost: form.cost ? parseFloat(form.cost) : null, status: form.status,
-downtime_start: form.downtime_start || null,
-downtime_end: form.downtime_end || null,
-downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null,
+    const record = {
+      id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: form.status,
+      downtime_start: form.downtime_start||null,
+      downtime_end: form.downtime_end||null,
+      downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null,
     };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
-    if (err) { setError(err.message); } else { setSuccess("Log added!"); setLogs(prev => [record, ...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed" }); setShowForm(false); }
+    if (err) { setError(err.message); } else { setSuccess("Log added!"); setLogs(prev => [record,...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" }); setShowForm(false); }
     setSaving(false);
   };
 
   const submitPart = async (logId) => {
     if (!partForm.part_name) { setError("Part name is required."); return; }
     setSaving(true); setError(null);
-    const qty = parseFloat(partForm.quantity) || 1;
-    const unitCost = parseFloat(partForm.unit_cost) || 0;
-    const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty * unitCost, supplier: partForm.supplier };
+    const qty = parseFloat(partForm.quantity)||1;
+    const unitCost = parseFloat(partForm.unit_cost)||0;
+    const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
-    if (err) { setError(err.message); } else { setSuccess("Part added!"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]), record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "" }); setShowPartForm(null); }
+    if (err) { setError(err.message); } else { setSuccess("Part added!"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "" }); setShowPartForm(null); }
     setSaving(false);
   };
 
-  const deletePart = async (partId, logId) => {
-    await supabase.from("spare_parts").delete().eq("id", partId);
-    setParts(prev => ({ ...prev, [logId]: prev[logId].filter(p => p.id !== partId) }));
-  };
-
-  const deleteLog = async (logId) => {
-    await supabase.from("spare_parts").delete().eq("log_id", logId);
-    await supabase.from("maintenance_logs").delete().eq("id", logId);
-    setLogs(prev => prev.filter(l => l.id !== logId));
-  };
-
-  const totalCost = logs.reduce((s, l) => s + (l.cost || 0), 0);
+  const deletePart = async (partId, logId) => { await supabase.from("spare_parts").delete().eq("id", partId); setParts(prev => ({ ...prev, [logId]: prev[logId].filter(p => p.id!==partId) })); };
+  const deleteLog = async (logId) => { await supabase.from("spare_parts").delete().eq("log_id", logId); await supabase.from("maintenance_logs").delete().eq("id", logId); setLogs(prev => prev.filter(l => l.id!==logId)); };
+  const totalCost = logs.reduce((s,l) => s+(l.cost||0), 0);
 
   return (
     <>
       {showChecklist && <ChecklistModal asset={asset} onClose={() => setShowChecklist(false)} />}
       <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 820, marginTop: 20, marginBottom: 20 }}>
-
-          {/* Header */}
           <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{asset.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{asset.category} · {asset.location} · {asset.id}</div>
-            </div>
+            <div><div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{asset.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{asset.category} · {asset.location}</div></div>
             <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
           </div>
-
-          {/* Stats */}
           <div style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {[["📋", logs.length, "Total Logs", C.blue], ["💰", fmt(totalCost), "Total Cost", C.accent], ["🔧", logs[0]?.start_date ? fmtDate(logs[0].start_date) : "Never", "Last Maintenance", C.green], ["⚙️", asset.pm_frequency ? `Every ${asset.pm_frequency} mo.` : "—", "PM Frequency", C.yellow]].map(([icon, val, label, color]) => (
+            {[["📋",logs.length,"Total Logs",C.blue],["💰",fmt(totalCost),"Total Cost",C.accent],["🔧",logs[0]?.start_date?fmtDate(logs[0].start_date):"Never","Last Maintenance",C.green],["⚙️",asset.pm_frequency?`Every ${asset.pm_frequency} mo.`:"—","PM Frequency",C.yellow]].map(([icon,val,label,color]) => (
               <div key={label} style={{ background: C.surface, borderRadius: 8, padding: "10px 16px", flex: "1 1 130px", borderLeft: `3px solid ${color}` }}>
-                <div style={{ fontSize: 16 }}>{icon}</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{val}</div>
-                <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
+                <div style={{ fontSize: 16 }}>{icon}</div><div style={{ fontSize: 18, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{val}</div><div style={{ fontSize: 11, color: C.muted }}>{label}</div>
               </div>
             ))}
           </div>
-
           <div style={{ padding: 24 }}>
             <ErrBanner msg={error} onDismiss={() => setError(null)} />
             <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
-
-            {/* Action Buttons */}
             <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-              <button onClick={() => setShowChecklist(true)} style={{ background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                📋 Run CIL Checklist
-              </button>
+              <button onClick={() => setShowChecklist(true)} style={{ background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📋 Run CIL Checklist</button>
               <Btn onClick={() => setShowForm(v => !v)}>+ Add Maintenance Log</Btn>
             </div>
-
-            {/* Add Log Form */}
             {showForm && (
               <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
                 <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>New Maintenance Log</div>
@@ -561,21 +721,16 @@ downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Dat
                   <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" />
                   <Input label="End Date" value={form.end_date} onChange={f("end_date")} type="date" />
                   <Input label="Total Cost ($)" value={form.cost} onChange={f("cost")} type="number" />
-                <Sel label="Status" value={form.status} onChange={f("status")} options={LOG_STATUSES} />
-<Input label="Downtime Start" value={form.downtime_start} onChange={f("downtime_start")} type="date" />
-<Input label="Back to Operation" value={form.downtime_end} onChange={f("downtime_end")} type="date" />
+                  <Sel label="Status" value={form.status} onChange={f("status")} options={LOG_STATUSES} />
+                  <Input label="Downtime Start" value={form.downtime_start} onChange={f("downtime_start")} type="date" />
+                  <Input label="Back to Operation" value={form.downtime_end} onChange={f("downtime_end")} type="date" />
                 </div>
                 <div style={{ marginTop: 12 }}><Textarea label="Description / Notes" value={form.description} onChange={f("description")} /></div>
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <Btn onClick={submitLog} disabled={saving}>{saving ? "Saving..." : "Save Log"}</Btn>
-                  <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
-                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}><Btn onClick={submitLog} disabled={saving}>{saving?"Saving...":"Save Log"}</Btn><Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn></div>
               </div>
             )}
-
-            {/* Log List */}
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Maintenance History</div>
-            {loadingLogs ? <Spinner /> : logs.length === 0 ? (
+            {loadingLogs ? <Spinner /> : logs.length===0 ? (
               <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>No maintenance records yet.</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -583,50 +738,33 @@ downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Dat
                   <div key={log.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
                     <div onClick={() => toggleLog(log.id)} style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 18 }}>{log.log_type === "Preventive Maintenance" ? "🔧" : log.log_type === "Corrective Repair" ? "🔨" : log.log_type === "Inspection" ? "🔍" : log.log_type === "Overhaul" ? "⚙️" : "🔩"}</span>
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{log.title}</div>
-                          <div style={{ fontSize: 11, color: C.muted }}>{fmtDate(log.start_date)}{log.performed_by ? ` · ${log.performed_by}` : ""}{log.vendor ? ` · ${log.vendor}` : ""}</div>
-                        </div>
+                        <span style={{ fontSize: 18 }}>{log.log_type==="Preventive Maintenance"?"🔧":log.log_type==="Corrective Repair"?"🔨":log.log_type==="Inspection"?"🔍":log.log_type==="Overhaul"?"⚙️":"🔩"}</span>
+                        <div><div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{log.title}</div><div style={{ fontSize: 11, color: C.muted }}>{fmtDate(log.start_date)}{log.performed_by?` · ${log.performed_by}`:""}{log.vendor?` · ${log.vendor}`:""}</div></div>
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <Badge label={log.log_type} color={statusColor(log.log_type)} />
                         <Badge label={log.status} color={statusColor(log.status)} />
-                        {log.cost > 0 && <span style={{ fontSize: 12, color: C.accent, fontWeight: 700 }}>{fmt(log.cost)}</span>}
-                        <span style={{ color: C.muted }}>{expandedLog === log.id ? "▲" : "▼"}</span>
+                        {log.cost>0 && <span style={{ fontSize: 12, color: C.accent, fontWeight: 700 }}>{fmt(log.cost)}</span>}
+                        <span style={{ color: C.muted }}>{expandedLog===log.id?"▲":"▼"}</span>
                       </div>
                     </div>
-
-                    {expandedLog === log.id && (
+                    {expandedLog===log.id && (
                       <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
-                        {log.description && <div style={{ marginTop: 14, padding: 12, background: C.card, borderRadius: 8, fontSize: 13, color: C.subtle, lineHeight: 1.6 }}>{log.description}</div>}
-{(log.downtime_start || log.downtime_end) && (
-  <div style={{ marginTop: 12, background: C.red+"11", border: `1px solid ${C.red}33`, borderRadius: 8, padding: "12px 16px", display: "flex", gap: 20, flexWrap: "wrap" }}>
-    <div>
-      <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>⛔ Equipment Down</div>
-      <div style={{ fontSize: 13, color: C.red, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_start) || "—"}</div>
-    </div>
-    <div style={{ fontSize: 20, color: C.muted, alignSelf: "center" }}>→</div>
-    <div>
-      <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>✅ Back to Operation</div>
-      <div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_end) || "Pending"}</div>
-    </div>
-    {log.downtime_hours && (
-      <div>
-        <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>⏱ Total Downtime</div>
-        <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700, marginTop: 2 }}>{log.downtime_hours} hours ({Math.round(log.downtime_hours/24)} days)</div>
-      </div>
-    )}
-  </div>
-)}
-
-                        {/* Spare Parts */}
+                        {log.description && <div style={{ marginTop: 12, padding: 12, background: C.card, borderRadius: 8, fontSize: 13, color: C.subtle, lineHeight: 1.6 }}>{log.description}</div>}
+                        {(log.downtime_start || log.downtime_end) && (
+                          <div style={{ marginTop: 12, background: C.red+"11", border: `1px solid ${C.red}33`, borderRadius: 8, padding: "12px 16px", display: "flex", gap: 20, flexWrap: "wrap" }}>
+                            <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>⛔ Equipment Down</div><div style={{ fontSize: 13, color: C.red, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_start)||"—"}</div></div>
+                            <div style={{ fontSize: 20, color: C.muted, alignSelf: "center" }}>→</div>
+                            <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>✅ Back to Operation</div><div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_end)||"Pending"}</div></div>
+                            {log.downtime_hours && <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>⏱ Total Downtime</div><div style={{ fontSize: 13, color: C.yellow, fontWeight: 700, marginTop: 2 }}>{log.downtime_hours}h ({Math.round(log.downtime_hours/24)}d)</div></div>}
+                          </div>
+                        )}
                         <div style={{ marginTop: 14 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔩 Spare Parts Used</div>
-                            {isAdmin && <Btn small onClick={() => setShowPartForm(showPartForm === log.id ? null : log.id)}>+ Add Part</Btn>}
+                            {isAdmin && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>+ Add Part</Btn>}
                           </div>
-                          {showPartForm === log.id && (
+                          {showPartForm===log.id && (
                             <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
                                 <Input label="Part Name *" value={partForm.part_name} onChange={pf("part_name")} />
@@ -635,36 +773,29 @@ downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Dat
                                 <Input label="Unit Cost ($)" value={partForm.unit_cost} onChange={pf("unit_cost")} type="number" />
                                 <Input label="Supplier" value={partForm.supplier} onChange={pf("supplier")} />
                               </div>
-                              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                                <Btn small onClick={() => submitPart(log.id)} disabled={saving}>Save</Btn>
-                                <Btn small variant="secondary" onClick={() => setShowPartForm(null)}>Cancel</Btn>
-                              </div>
+                              <div style={{ display: "flex", gap: 8, marginTop: 10 }}><Btn small onClick={() => submitPart(log.id)} disabled={saving}>Save</Btn><Btn small variant="secondary" onClick={() => setShowPartForm(null)}>Cancel</Btn></div>
                             </div>
                           )}
                           {parts[log.id]?.length > 0 ? (
                             <div style={{ overflowX: "auto" }}>
                               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                                <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                                  {["Part Name", "Part No.", "Qty", "Unit", "Total", "Supplier", ...(isAdmin ? [""] : [])].map(h => (
-                                    <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>
-                                  ))}
-                                </tr></thead>
+                                <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["Part Name","Part No.","Qty","Unit","Total","Supplier",...(isAdmin?[""]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>)}</tr></thead>
                                 <tbody>
                                   {parts[log.id].map(part => (
                                     <tr key={part.id} style={{ borderBottom: `1px solid ${C.border}22` }}>
                                       <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{part.part_name}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle, fontFamily: "monospace", fontSize: 11 }}>{part.part_number||"—"}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle }}>{part.quantity}</td>
-                                      <td style={{ padding: "8px 10px", color: C.subtle }}>{part.unit_cost ? `$${part.unit_cost}` : "—"}</td>
-                                      <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost ? `$${part.total_cost}` : "—"}</td>
+                                      <td style={{ padding: "8px 10px", color: C.subtle }}>{part.unit_cost?`$${part.unit_cost}`:"—"}</td>
+                                      <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost?`$${part.total_cost}`:"—"}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
                                       {isAdmin && <td style={{ padding: "8px 10px" }}><Btn small variant="danger" onClick={() => deletePart(part.id, log.id)}>Del</Btn></td>}
                                     </tr>
                                   ))}
                                   <tr style={{ borderTop: `1px solid ${C.border}` }}>
                                     <td colSpan={4} style={{ padding: "8px 10px", color: C.muted, fontSize: 11 }}>Parts Total</td>
-                                    <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>${parts[log.id].reduce((s, p) => s+(p.total_cost||0), 0).toLocaleString()}</td>
-                                    <td colSpan={isAdmin ? 2 : 1} />
+                                    <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>${parts[log.id].reduce((s,p) => s+(p.total_cost||0),0).toLocaleString()}</td>
+                                    <td colSpan={isAdmin?2:1} />
                                   </tr>
                                 </tbody>
                               </table>
@@ -692,7 +823,8 @@ function LoginScreen() {
     if (!email || !password) { setError("Please enter your email and password."); return; }
     setLoading(true); setError(null);
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-    if (err) setError(err.message); setLoading(false);
+    if (err) setError(err.message);
+    setLoading(false);
   };
   return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif", padding: 16 }}>
@@ -708,7 +840,7 @@ function LoginScreen() {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Input label="Email" value={email} onChange={setEmail} type="email" />
             <Input label="Password" value={password} onChange={setPassword} type="password" />
-            <button onClick={signIn} disabled={loading} style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 6, padding: "12px", fontSize: 15, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1 }}>
+            <button onClick={signIn} disabled={loading} style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 6, padding: "12px", fontSize: 15, fontWeight: 700, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1 }}>
               {loading ? "Signing in..." : "Sign In"}
             </button>
           </div>
@@ -724,36 +856,28 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null);
   const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
-  const filtered = filter === "All" ? workOrders : workOrders.filter(w => w.status === filter);
-  const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
-
+  const filtered = filter==="All" ? workOrders : workOrders.filter(w => w.status===filter);
+  const vendorOptions = ["— None —",...vendors.filter(v => v.status==="Active").map(v => v.name)];
   const submit = async () => {
-    if (!form.title || !form.asset) { setError("Title and Asset are required."); return; }
+    if (!form.title||!form.asset) { setError("Title and Asset are required."); return; }
     setSaving(true); setError(null);
     const record = { id: uid("WO"), title: form.title, asset: form.asset, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: form.vendor==="— None —"?null:form.vendor||null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
     if (err) { setError(err.message); } else { onAdd(record); setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" }); setShowForm(false); }
     setSaving(false);
   };
-  const updateStatus = async (id, val) => { await supabase.from("work_orders").update({ status: val }).eq("id", id); setWorkOrders(prev => prev.map(wo => wo.id===id ? {...wo, status: val} : wo)); };
-  const updatePriority = async (id, val) => { await supabase.from("work_orders").update({ priority: val }).eq("id", id); setWorkOrders(prev => prev.map(wo => wo.id===id ? {...wo, priority: val} : wo)); };
-  const saveEdit = async (updated) => { const { error: err } = await supabase.from("work_orders").update(updated).eq("id", updated.id); if (!err) { setWorkOrders(prev => prev.map(wo => wo.id===updated.id ? updated : wo)); setEditItem(null); } else setError(err.message); };
-  const confirmDelete = async () => { await supabase.from("work_orders").delete().eq("id", deleteItem.id); setWorkOrders(prev => prev.filter(wo => wo.id!==deleteItem.id)); setDeleteItem(null); };
-
+  const updateStatus = async (id,val) => { await supabase.from("work_orders").update({ status: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,status:val}:wo)); };
+  const updatePriority = async (id,val) => { await supabase.from("work_orders").update({ priority: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,priority:val}:wo)); };
+  const saveEdit = async (updated) => { const { error: err } = await supabase.from("work_orders").update(updated).eq("id",updated.id); if (!err) { setWorkOrders(prev => prev.map(wo => wo.id===updated.id?updated:wo)); setEditItem(null); } else setError(err.message); };
+  const confirmDelete = async () => { await supabase.from("work_orders").delete().eq("id",deleteItem.id); setWorkOrders(prev => prev.filter(wo => wo.id!==deleteItem.id)); setDeleteItem(null); };
   return (
     <div>
-      {editItem && <EditModal title="Work Order" data={editItem} fields={[
-        {key:"title",label:"Title"},{key:"asset",label:"Asset"},{key:"priority",label:"Priority",options:["Critical","High","Medium","Low"]},
-        {key:"status",label:"Status",options:["Open","In Progress","Pending","Completed"]},{key:"vendor",label:"Vendor",options:vendorOptions},
-        {key:"assignee",label:"Assignee"},{key:"start_date",label:"Start Date",type:"date"},{key:"due",label:"Due Date",type:"date"},
-      ]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal title="Work Order" data={editItem} fields={[{key:"title",label:"Title"},{key:"asset",label:"Asset"},{key:"priority",label:"Priority",options:["Critical","High","Medium","Low"]},{key:"status",label:"Status",options:["Open","In Progress","Pending","Completed"]},{key:"vendor",label:"Vendor",options:vendorOptions},{key:"assignee",label:"Assignee"},{key:"start_date",label:"Start Date",type:"date"},{key:"due",label:"Due Date",type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {["All","Open","In Progress","Pending","Completed"].map(s => (
-            <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{s}</button>
-          ))}
+          {["All","Open","In Progress","Pending","Completed"].map(s => <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{s}</button>)}
         </div>
         <Btn onClick={() => setShowForm(v => !v)}>+ New Work Order</Btn>
       </div>
@@ -761,35 +885,25 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>New Work Order</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            <Input label="Title *" value={form.title} onChange={f("title")} />
-            <Input label="Asset *" value={form.asset} onChange={f("asset")} />
-            <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" />
-            <Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
-            <Sel label="Priority" value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
-            <Sel label="Vendor" value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
+            <Input label="Title *" value={form.title} onChange={f("title")} /><Input label="Asset *" value={form.asset} onChange={f("asset")} />
+            <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" /><Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
+            <Sel label="Priority" value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} /><Sel label="Vendor" value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn onClick={submit} disabled={saving}>{saving?"Saving...":"Create"}</Btn>
-            <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
-          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}><Btn onClick={submit} disabled={saving}>{saving?"Saving...":"Create"}</Btn><Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn></div>
         </div>
       )}
       {loading ? <Spinner /> : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
-            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["ID","Title","Asset","Priority","Status","Vendor","Start","Due",...(isAdmin?["Actions"]:[])].map(h => (
-                <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>
-              ))}
-            </tr></thead>
+            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["ID","Title","Asset","Priority","Status","Vendor","Start","Due",...(isAdmin?["Actions"]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>)}</tr></thead>
             <tbody>
-              {filtered.map((wo, i) => (
+              {filtered.map((wo,i) => (
                 <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
                   <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
-                  <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id, val)} /></td>
-                  <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={["Open","In Progress","Pending","Completed"]} onChange={val => updateStatus(wo.id, val)} /></td>
+                  <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
+                  <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={["Open","In Progress","Pending","Completed"]} onChange={val => updateStatus(wo.id,val)} /></td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor||"—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.start_date||"—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>{wo.due||"—"}</td>
@@ -809,13 +923,11 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
-  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All");
-  const [search, setSearch] = useState("");
+  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [search, setSearch] = useState("");
   const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
-  const categories = ["All", ...new Set(assets.map(a => a.category).filter(Boolean))];
-  const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter) && (catFilter==="All"||a.category===catFilter) && (!search||a.name.toLowerCase().includes(search.toLowerCase())));
-
+  const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
+  const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter)&&(catFilter==="All"||a.category===catFilter)&&(!search||a.name.toLowerCase().includes(search.toLowerCase())));
   const submit = async () => {
     if (!form.name) { setError("Asset name is required."); return; }
     if (form.location==="— Select Site —") { setError("Please select a site."); return; }
@@ -825,22 +937,15 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
     if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" }); setShowForm(false); }
     setSaving(false);
   };
-  const updateStatus = async (id, val) => { await supabase.from("assets").update({ status: val }).eq("id", id); setAssets(prev => prev.map(a => a.id===id ? {...a, status: val} : a)); };
-  const saveEdit = async (updated) => { const { error: err } = await supabase.from("assets").update(updated).eq("id", updated.id); if (!err) { setAssets(prev => prev.map(a => a.id===updated.id ? updated : a)); setEditItem(null); } else setError(err.message); };
-  const confirmDelete = async () => { await supabase.from("assets").delete().eq("id", deleteItem.id); setAssets(prev => prev.filter(a => a.id!==deleteItem.id)); setDeleteItem(null); };
-
+  const updateStatus = async (id,val) => { await supabase.from("assets").update({ status: val }).eq("id",id); setAssets(prev => prev.map(a => a.id===id?{...a,status:val}:a)); };
+  const saveEdit = async (updated) => { const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id); if (!err) { setAssets(prev => prev.map(a => a.id===updated.id?updated:a)); setEditItem(null); } else setError(err.message); };
+  const confirmDelete = async () => { await supabase.from("assets").delete().eq("id",deleteItem.id); setAssets(prev => prev.filter(a => a.id!==deleteItem.id)); setDeleteItem(null); };
   return (
     <div>
-      {editItem && <EditModal title="Asset" data={editItem} fields={[
-        {key:"name",label:"Asset Name"},{key:"category",label:"Category"},{key:"location",label:"Site",options:SITES},
-        {key:"value",label:"Est. Value"},{key:"status",label:"Status",options:["Operational","Under Maintenance","Degraded"]},
-        {key:"pm_frequency",label:"PM Frequency (months)"},{key:"pm_task",label:"PM Task"},
-        {key:"last_service",label:"Last Service",type:"date"},{key:"next_service",label:"Next Service",type:"date"},
-      ]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal title="Asset" data={editItem} fields={[{key:"name",label:"Asset Name"},{key:"category",label:"Category"},{key:"location",label:"Site",options:SITES},{key:"value",label:"Est. Value"},{key:"status",label:"Status",options:["Operational","Under Maintenance","Degraded"]},{key:"pm_frequency",label:"PM Frequency (months)"},{key:"pm_task",label:"PM Task"},{key:"last_service",label:"Last Service",type:"date"},{key:"next_service",label:"Next Service",type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       {selectedAsset && <MaintenanceModal asset={selectedAsset} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} vendors={vendors} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
-
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 18 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search assets..." style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 12px", color: C.text, fontSize: 13, flex: "1 1 180px" }} />
         <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
@@ -851,26 +956,19 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
         </select>
         <Btn onClick={() => setShowForm(v => !v)}>+ Add Asset</Btn>
       </div>
-
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>Register New Asset</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            <Input label="Asset Name *" value={form.name} onChange={f("name")} />
-            <Input label="Category" value={form.category} onChange={f("category")} />
-            <Sel label="Site *" value={form.location} onChange={f("location")} options={SITES} />
-            <Input label="Est. Value" value={form.value} onChange={f("value")} />
+            <Input label="Asset Name *" value={form.name} onChange={f("name")} /><Input label="Category" value={form.category} onChange={f("category")} />
+            <Sel label="Site *" value={form.location} onChange={f("location")} options={SITES} /><Input label="Est. Value" value={form.value} onChange={f("value")} />
             <Input label="Next Service Date" value={form.next_service} onChange={f("next_service")} type="date" />
             <Sel label="PM Frequency (months)" value={form.pm_frequency} onChange={f("pm_frequency")} options={["1","2","3","6","12"]} />
             <Input label="PM Task" value={form.pm_task} onChange={f("pm_task")} />
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn onClick={submit} disabled={saving}>{saving?"Saving...":"Register"}</Btn>
-            <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
-          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}><Btn onClick={submit} disabled={saving}>{saving?"Saving...":"Register"}</Btn><Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn></div>
         </div>
       )}
-
       {loading ? <Spinner /> : (
         <div>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{filtered.length} assets shown</div>
@@ -878,11 +976,8 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
             {filtered.map(a => (
               <div key={a.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, borderTop: `3px solid ${statusColor(a.status)}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                  <div style={{ flex: 1, marginRight: 8 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{a.name}</div>
-                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.category}</div>
-                  </div>
-                  <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id, val)} />
+                  <div style={{ flex: 1, marginRight: 8 }}><div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{a.name}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.category}</div></div>
+                  <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, marginBottom: 14 }}>
                   {[["Site",a.location],["Value",a.value],["PM Every",a.pm_frequency?`${a.pm_frequency} mo.`:"—"],["Last PM",a.last_pm_date?fmtDate(a.last_pm_date):"Never"]].map(([lbl,val]) => (
@@ -890,9 +985,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
                   ))}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                    📋 Log & Checklist
-                  </button>
+                  <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📋 Log & Checklist</button>
                   {isAdmin && <><Btn small onClick={() => setEditItem(a)} color={C.accent}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(a)}>Del</Btn></>}
                 </div>
               </div>
@@ -918,16 +1011,12 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
     if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", specialty: "", contact: "", phone: "", email: "" }); setShowForm(false); }
     setSaving(false);
   };
-  const saveEdit = async (updated) => { const { error: err } = await supabase.from("vendors").update(updated).eq("id", updated.id); if (!err) { setVendors(prev => prev.map(v => v.id===updated.id ? updated : v)); setEditItem(null); } else setError(err.message); };
-  const confirmDelete = async () => { await supabase.from("vendors").delete().eq("id", deleteItem.id); setVendors(prev => prev.filter(v => v.id!==deleteItem.id)); setDeleteItem(null); };
+  const saveEdit = async (updated) => { const { error: err } = await supabase.from("vendors").update(updated).eq("id",updated.id); if (!err) { setVendors(prev => prev.map(v => v.id===updated.id?updated:v)); setEditItem(null); } else setError(err.message); };
+  const confirmDelete = async () => { await supabase.from("vendors").delete().eq("id",deleteItem.id); setVendors(prev => prev.filter(v => v.id!==deleteItem.id)); setDeleteItem(null); };
   const Stars = ({ rating }) => <div style={{ display: "flex", gap: 2 }}>{[1,2,3,4,5].map(i => <span key={i} style={{ color: i<=Math.floor(rating)?C.yellow:C.border, fontSize: 14 }}>*</span>)}<span style={{ fontSize: 11, color: C.muted, marginLeft: 4 }}>{rating>0?Number(rating).toFixed(1):"N/A"}</span></div>;
-
   return (
     <div>
-      {editItem && <EditModal title="Vendor" data={editItem} fields={[
-        {key:"name",label:"Company Name"},{key:"specialty",label:"Specialty"},{key:"contact",label:"Contact"},
-        {key:"phone",label:"Phone"},{key:"email",label:"Email"},{key:"status",label:"Status",options:["Active","Inactive"]},{key:"rating",label:"Rating (0-5)"},
-      ]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal title="Vendor" data={editItem} fields={[{key:"name",label:"Company Name"},{key:"specialty",label:"Specialty"},{key:"contact",label:"Contact"},{key:"phone",label:"Phone"},{key:"email",label:"Email"},{key:"status",label:"Status",options:["Active","Inactive"]},{key:"rating",label:"Rating (0-5)"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}><Btn onClick={() => setShowForm(v => !v)}>+ Add Vendor</Btn></div>
@@ -969,48 +1058,40 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated }) {
   const [generating, setGenerating] = useState(false); const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const pmDueCount = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length;
-
   const generatePMWorkOrders = async () => {
     setGenerating(true); setError(null);
-    const now = new Date();
-    const due = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; });
+    const now=new Date(); const due=assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; });
     if (!due.length) { setSuccess("No assets due for PM!"); setGenerating(false); return; }
-    const dueDate = new Date(now.getFullYear(), now.getMonth()+1, 0).toISOString().split("T")[0];
-    const newWOs = due.map(a => ({ id: uid("WO"), title: `PM - ${a.name}`, asset: a.name, priority: "Medium", status: "Open", assignee: null, start_date: TODAY, due: dueDate, vendor: null }));
-    const { error: err } = await supabase.from("work_orders").insert(newWOs);
-    if (err) { setError(err.message); } else { await supabase.from("assets").update({ last_pm_date: TODAY }).in("id", due.map(a => a.id)); setSuccess(`Generated ${newWOs.length} PM work orders!`); onWorkOrdersGenerated(newWOs); }
+    const dueDate=new Date(now.getFullYear(),now.getMonth()+1,0).toISOString().split("T")[0];
+    const newWOs=due.map(a => ({ id: uid("WO"), title: `PM - ${a.name}`, asset: a.name, priority: "Medium", status: "Open", assignee: null, start_date: TODAY, due: dueDate, vendor: null }));
+    const { error: err }=await supabase.from("work_orders").insert(newWOs);
+    if (err) { setError(err.message); } else { await supabase.from("assets").update({ last_pm_date: TODAY }).in("id",due.map(a => a.id)); setSuccess(`Generated ${newWOs.length} PM work orders!`); onWorkOrdersGenerated(newWOs); }
     setGenerating(false);
   };
-
   const handleImport = (e) => {
-    const file = e.target.files[0]; if (!file) return;
+    const file=e.target.files[0]; if (!file) return;
     setUploading(true); setError(null);
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
+    const reader=new FileReader();
+    reader.onload=async (evt) => {
       try {
-        const data = XLSX.utils.sheet_to_json(XLSX.read(evt.target.result, { type: "binary" }).Sheets[Object.keys(XLSX.read(evt.target.result, { type: "binary" }).Sheets)[0]]);
-        const records = data.map(row => ({ id: uid("AST"), name: row["Asset Name"]||row["name"]||"", category: row["Category"]||"", location: row["Site"]||"", value: row["Value"]?String(row["Value"]):"", status: "Operational", last_service: TODAY, next_service: null, pm_frequency: parseInt(row["PM Frequency (months)"]||1), pm_task: row["PM Task"]||"Scheduled Maintenance", last_pm_date: null })).filter(r => r.name);
-        const { error: err } = await supabase.from("assets").insert(records);
+        const data=XLSX.utils.sheet_to_json(XLSX.read(evt.target.result,{type:"binary"}).Sheets[Object.keys(XLSX.read(evt.target.result,{type:"binary"}).Sheets)[0]]);
+        const records=data.map(row => ({ id: uid("AST"), name: row["Asset Name"]||row["name"]||"", category: row["Category"]||"", location: row["Site"]||"", value: row["Value"]?String(row["Value"]):"", status: "Operational", last_service: TODAY, next_service: null, pm_frequency: parseInt(row["PM Frequency (months)"]||1), pm_task: row["PM Task"]||"Scheduled Maintenance", last_pm_date: null })).filter(r => r.name);
+        const { error: err }=await supabase.from("assets").insert(records);
         if (err) { setError(err.message); } else { setSuccess(`Imported ${records.length} assets!`); onAssetsImported(records); }
       } catch { setError("Failed to parse file."); }
       setUploading(false);
     };
     reader.readAsBinaryString(file);
   };
-
   return (
     <div>
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 24, marginBottom: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Generate PM Work Orders</div>
-        <div style={{ fontSize: 13, color: C.subtle, marginBottom: 16 }}>Auto-create work orders for all assets due for preventive maintenance this month.</div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
           {[["📋",pmDueCount,"Assets due for PM",C.accent],["🏭",assets.length,"Total assets",C.blue],["📅",new Date().toLocaleString("default",{month:"long",year:"numeric"}),"Current month",C.green]].map(([icon,val,label,color]) => (
-            <div key={label} style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${color}` }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{val}</div>
-              <div style={{ fontSize: 12, color: C.muted }}>{label}</div>
-            </div>
+            <div key={label} style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${color}` }}><div style={{ fontSize: 22, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{val}</div><div style={{ fontSize: 12, color: C.muted }}>{label}</div></div>
           ))}
         </div>
         <Btn onClick={generatePMWorkOrders} disabled={generating||pmDueCount===0}>{generating?"Generating...":`Generate ${pmDueCount} PM Work Orders`}</Btn>
@@ -1027,22 +1108,23 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated }) {
   );
 }
 
-function Overview({ workOrders, assets, vendors }) {
-  const open = workOrders.filter(w => w.status!=="Completed").length;
-  const critical = workOrders.filter(w => w.priority==="Critical").length;
-  const opAssets = assets.filter(a => a.status==="Operational").length;
-  const activeVendors = vendors.filter(v => v.status==="Active").length;
-  const overdue = workOrders.filter(w => w.due&&w.due<=TODAY&&w.status!=="Completed").length;
-  const pmDue = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length;
-
+function Overview({ workOrders, assets, vendors, breakdownCount }) {
+  const open=workOrders.filter(w => w.status!=="Completed").length;
+  const critical=workOrders.filter(w => w.priority==="Critical").length;
+  const opAssets=assets.filter(a => a.status==="Operational").length;
+  const downAssets=assets.filter(a => a.status==="Under Maintenance").length;
+  const activeVendors=vendors.filter(v => v.status==="Active").length;
+  const overdue=workOrders.filter(w => w.due&&w.due<=TODAY&&w.status!=="Completed").length;
+  const pmDue=assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length;
   return (
     <div>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
         <StatCard icon="🔧" label="Open Work Orders" value={open} sub={`${critical} critical`} color={C.accent} />
         <StatCard icon="🏭" label="Operational Assets" value={`${opAssets}/${assets.length}`} sub="fleet status" color={C.green} />
-        <StatCard icon="🤝" label="Active Vendors" value={activeVendors} sub="contractors on file" color={C.blue} />
-        <StatCard icon="⚠️" label="Overdue / At Risk" value={overdue} sub="past due date" color={C.red} />
-        <StatCard icon="📋" label="PM Due This Month" value={pmDue} sub="preventive maintenance" color={C.yellow} />
+        <StatCard icon="🚨" label="Assets Down" value={downAssets} sub="under maintenance" color={C.red} />
+        <StatCard icon="⚠️" label="Overdue / At Risk" value={overdue} sub="past due date" color={C.yellow} />
+        <StatCard icon="📋" label="PM Due This Month" value={pmDue} sub="preventive maintenance" color={C.blue} />
+        <StatCard icon="🤝" label="Active Vendors" value={activeVendors} sub="contractors on file" color={C.purple} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
@@ -1058,11 +1140,16 @@ function Overview({ workOrders, assets, vendors }) {
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>Assets by Site</div>
           {SITES.filter(s => s!=="— Select Site —").map(site => {
-            const count = assets.filter(a => a.location===site).length; if (!count) return null;
-            const op = assets.filter(a => a.location===site&&a.status==="Operational").length;
+            const count=assets.filter(a => a.location===site).length; if (!count) return null;
+            const op=assets.filter(a => a.location===site&&a.status==="Operational").length;
+            const down=assets.filter(a => a.location===site&&a.status==="Under Maintenance").length;
             return <div key={site} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <span style={{ fontSize: 13, color: C.subtle }}>{site}</span>
-              <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: C.green }}>{op} ok</span><span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{count}</span></div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <span style={{ fontSize: 11, color: C.green }}>{op} ok</span>
+                {down>0 && <span style={{ fontSize: 11, color: C.red }}>{down} down</span>}
+                <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{count}</span>
+              </div>
             </div>;
           })}
         </div>
@@ -1071,18 +1158,129 @@ function Overview({ workOrders, assets, vendors }) {
   );
 }
 
+// ─── USER MANAGEMENT (Admin only) ────────────────────────────────────────────
+function UserManagement() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "" });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  useEffect(() => { loadUsers(); }, []);
+  const loadUsers = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("user_roles").select("*").order("name");
+    setUsers(data || []);
+    setLoading(false);
+  };
+
+  const submit = async () => {
+    if (!form.email || !form.name) { setError("Email and name are required."); return; }
+    setSaving(true); setError(null);
+    const record = { id: uid("USR"), email: form.email, name: form.name, role: form.role, site: form.site || null };
+    const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
+    if (err) { setError(err.message); } else { setSuccess("User added/updated!"); setForm({ email: "", name: "", role: "operations", site: "" }); setShowForm(false); loadUsers(); }
+    setSaving(false);
+  };
+
+  const deleteUser = async (id) => {
+    await supabase.from("user_roles").delete().eq("id", id);
+    setUsers(prev => prev.filter(u => u.id !== id));
+  };
+
+  const roleColor = (r) => ({ admin: C.accent, maintenance: C.blue, operations: C.green }[r] || C.muted);
+  const roleIcon = (r) => ({ admin: "★", maintenance: "🔧", operations: "🏭" }[r] || "👤");
+
+  return (
+    <div>
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>User Management</div>
+          <div style={{ fontSize: 13, color: C.muted }}>Manage who can access the app and their roles.</div>
+        </div>
+        <Btn onClick={() => setShowForm(v => !v)}>+ Add User</Btn>
+      </div>
+
+      {/* Role descriptions */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 24 }}>
+        {[["🏭", "Operations", "operations", "Can report breakdowns and view equipment status", C.green],
+          ["🔧", "Maintenance", "maintenance", "Can resolve breakdowns, run checklists, add logs", C.blue],
+          ["★", "Admin", "admin", "Full access — edit, delete, manage users", C.accent]].map(([icon, title, role, desc, color]) => (
+          <div key={role} style={{ background: C.card, border: `1px solid ${color}44`, borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 18, marginBottom: 6 }}>{icon}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color }}{...{}}>{title}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{desc}</div>
+          </div>
+        ))}
+      </div>
+
+      {showForm && (
+        <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+          <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>Add / Update User</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+            <Input label="Email *" value={form.email} onChange={f("email")} type="email" />
+            <Input label="Full Name *" value={form.name} onChange={f("name")} />
+            <Sel label="Role" value={form.role} onChange={f("role")} options={["operations", "maintenance", "admin"]} />
+            <Sel label="Default Site" value={form.site || "— Select Site —"} onChange={f("site")} options={["— Select Site —", ...SITES.filter(s => s !== "— Select Site —")]} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn onClick={submit} disabled={saving}>{saving ? "Saving..." : "Save User"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowForm(false)}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+
+      {loading ? <Spinner /> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+          {users.map(u => (
+            <div key={u.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.email}</div>
+                </div>
+                <span style={{ background: roleColor(u.role)+"22", color: roleColor(u.role), border: `1px solid ${roleColor(u.role)}44`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>
+                  {roleIcon(u.role)} {u.role}
+                </span>
+              </div>
+              {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>📍 Default site: {u.site}</div>}
+              <Btn small variant="danger" onClick={() => deleteUser(u.id)}>Remove</Btn>
+            </div>
+          ))}
+          {users.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No users registered yet.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null); const [authLoading, setAuthLoading] = useState(true);
+  const [userRole, setUserRole] = useState({ role: "operations", name: "", site: "" });
   const [tab, setTab] = useState("Overview");
   const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
-  const isAdmin = session?.user?.email === ADMIN_EMAIL;
+  const isAdmin = session?.user?.email === ADMIN_EMAIL || userRole.role === "admin";
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthLoading(false); });
     supabase.auth.onAuthStateChange((_e, session) => { setSession(session); setAuthLoading(false); });
   }, []);
+
+  useEffect(() => {
+    if (session) {
+      supabase.from("user_roles").select("*").eq("email", session.user.email).single().then(({ data }) => {
+        if (data) setUserRole(data);
+        else setUserRole({ role: session.user.email === ADMIN_EMAIL ? "admin" : "operations", name: session.user.email, site: "" });
+      });
+    }
+  }, [session]);
 
   const load = useCallback(async () => {
     setLoading({ workOrders: true, assets: true, vendors: true });
@@ -1102,7 +1300,16 @@ export default function App() {
   if (authLoading) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>Loading...</div>;
   if (!session) return <LoginScreen />;
 
-  const tabs = ["Overview", "Work Orders", "Assets", "Vendors", "PM Planner"];
+  const roleColor = { admin: C.accent, maintenance: C.blue, operations: C.green }[userRole.role] || C.muted;
+  const roleIcon = { admin: "★", maintenance: "🔧", operations: "🏭" }[userRole.role] || "👤";
+
+  // Tabs based on role
+  const tabs = [
+    "Overview",
+    "Breakdowns",
+    ...(userRole.role !== "operations" ? ["Work Orders", "Assets", "Vendors", "PM Planner"] : []),
+    ...(isAdmin ? ["Users"] : []),
+  ];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', sans-serif", color: C.text }}>
@@ -1112,12 +1319,13 @@ export default function App() {
             <div style={{ background: C.accent, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🏭</div>
             <div>
               <div style={{ fontFamily: "monospace", fontSize: 16, letterSpacing: 2, color: C.text, fontWeight: 800 }}>FACILITY COMMAND</div>
-              <div style={{ fontSize: 9, color: C.muted }}>INDUSTRIAL WAREHOUSE MANAGEMENT {isAdmin && <span style={{ color: C.accent }}>★ ADMIN</span>}</div>
+              <div style={{ fontSize: 9, color: C.muted }}>INDUSTRIAL WAREHOUSE MANAGEMENT</div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button onClick={load} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Refresh</button>
-            <div style={{ fontSize: 11, color: C.muted, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user.email}</div>
+            <span style={{ background: roleColor+"22", color: roleColor, border: `1px solid ${roleColor}44`, borderRadius: 4, padding: "3px 8px", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon} {userRole.role}</span>
+            <div style={{ fontSize: 11, color: C.muted, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userRole.name || session.user.email}</div>
             <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Sign Out</button>
           </div>
         </div>
@@ -1128,10 +1336,12 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {tab==="Overview" && <Overview workOrders={workOrders} assets={assets} vendors={vendors} />}
+        {tab==="Breakdowns" && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} />}
         {tab==="Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} />}
         {tab==="Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} />}
         {tab==="Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} />}
         {tab==="PM Planner" && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} />}
+        {tab==="Users" && isAdmin && <UserManagement />}
       </div>
     </div>
   );
