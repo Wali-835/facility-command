@@ -481,6 +481,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, vendors }) {
 downtime_start: form.downtime_start || null,
 downtime_end: form.downtime_end || null,
 downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null,
+    };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess("Log added!"); setLogs(prev => [record, ...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed" }); setShowForm(false); }
     setSaving(false);
