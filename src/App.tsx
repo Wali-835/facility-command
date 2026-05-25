@@ -216,14 +216,14 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
 
-  const downtimeHours = hoursBetween(breakdown.downtime_start, new Date().toISOString());
+  const downtimeMins = minutesBetween(breakdown.downtime_start, new Date().toISOString());
 
   const submit = async () => {
     if (!form.resolved_by) { setError("Please enter your name."); return; }
     if (!form.maintenance_notes) { setError("Please add maintenance notes."); return; }
     setSaving(true); setError(null);
     const now = new Date().toISOString();
-    const hours = hoursBetween(breakdown.downtime_start, now);
+    const hours = minutesBetween(breakdown.downtime_start, now) / 60;
 
     // Update breakdown report
     await supabase.from("breakdown_reports").update({
@@ -274,7 +274,7 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
             <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Reported by:</strong> {breakdown.reported_by}</div>
             <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Reported at:</strong> {fmtDateTime(breakdown.reported_at)}</div>
             <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Issue:</strong> {breakdown.description}</div>
-            <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700 }}>⏱ Current downtime: {downtimeHours} hours</div>
+            <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700 }}>⏱ Current downtime: {formatDowntime(downtimeMins)}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Input label="Resolved By (Technician) *" value={form.resolved_by} onChange={f("resolved_by")} placeholder="Your full name" />
