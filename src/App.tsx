@@ -37,6 +37,14 @@ const fmt = (n) => n ? `$${Number(n).toLocaleString()}` : "—";
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
 const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 const hoursBetween = (a, b) => a && b ? Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60)) : null;
+const minutesBetween = (a, b) => a && b ? Math.round((new Date(b) - new Date(a)) / (1000 * 60)) : null;
+const formatDowntime = (minutes) => {
+  if (!minutes) return "—";
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m > 0 ? `${h}h ${m}min` : `${h}h`;
+};
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 const Badge = ({ label, color }) => (
@@ -308,8 +316,9 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
 
   const filtered = filter === "All" ? breakdowns : breakdowns.filter(b => b.status === filter);
   const openCount = breakdowns.filter(b => b.status === "Open").length;
+  const acknowledgedCount = breakdowns.filter(b => b.status === "Acknowledged").length;
   const resolvedCount = breakdowns.filter(b => b.status === "Resolved").length;
-  const totalDowntime = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + b.downtime_hours, 0);
+  const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours * 60), 0);
 
   const onReported = (record) => {
     setBreakdowns(prev => [record, ...prev]);
@@ -321,6 +330,18 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
     setBreakdowns(prev => prev.map(b => b.id === updated.id ? updated : b));
     setAssets(prev => prev.map(a => a.id === updated.asset_id ? { ...a, status: "Operational" } : a));
     setSuccess("Breakdown resolved! Equipment is back to operation. Maintenance log created automatically.");
+  };
+
+  const acknowledge = async (b) => {
+    const now = new Date().toISOString();
+    const { error: err } = await supabase.from("breakdown_reports").update({
+      status: "Acknowledged",
+      acknowledged_by: userRole.name || userRole.email || "",
+      acknowledged_at: now,
+    }).eq("id", b.id);
+    if (err) { setError(err.message); return; }
+    setBreakdowns(prev => prev.map(x => x.id === b.id ? { ...x, status: "Acknowledged", acknowledged_by: userRole.name, acknowledged_at: now } : x));
+    setSuccess("Breakdown acknowledged. You are now responsible for resolving it.");
   };
 
   return (
@@ -338,12 +359,13 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
       {/* Stats */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
         <StatCard icon="🚨" label="Open Breakdowns" value={openCount} sub="needs attention" color={C.red} />
+        <StatCard icon="👁" label="Acknowledged" value={acknowledgedCount} sub="being handled" color={C.blue} />
         <StatCard icon="✅" label="Resolved" value={resolvedCount} sub="this period" color={C.green} />
-        <StatCard icon="⏱" label="Total Downtime" value={`${totalDowntime}h`} sub="all breakdowns" color={C.yellow} />
+        <StatCard icon="⏱" label="Total Downtime" value={formatDowntime(totalDowntimeMins)} sub="all breakdowns" color={C.yellow} />
         <StatCard icon="🏭" label="Assets Down" value={assets.filter(a => a.status === "Under Maintenance").length} sub="currently offline" color={C.accent} />
       </div>
 
-      {/* Report Breakdown Button (Operations & Admin) */}
+      {/* Report Breakdown Button */}
       {(userRole.role === "operations" || userRole.role === "admin") && (
         <div style={{ background: C.card, border: `1px solid ${C.red}33`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🚨 Report Equipment Breakdown</div>
@@ -354,7 +376,7 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
               <option value="">— Select Equipment —</option>
               {assets.filter(a => a.status !== "Under Maintenance").map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
             </select>
-            <Btn onClick={() => { if (!selectedAsset) { setError("Please select an equipment first."); return; } setShowReportForm(true); }} color={C.red}>
+            <Btn onClick={() => { if (!selectedAsset) { setError("Please select equipment first."); return; } setShowReportForm(true); }} color={C.red}>
               🚨 Report Breakdown
             </Btn>
           </div>
@@ -378,16 +400,22 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {filtered.map(b => {
             const isResolved = b.status === "Resolved";
-            const currentDowntime = isResolved ? b.downtime_hours : hoursBetween(b.downtime_start, new Date().toISOString());
+            const isAcknowledged = b.status === "Acknowledged";
+            const currentDowntimeMins = isResolved
+              ? Math.round((b.downtime_hours || 0) * 60)
+              : minutesBetween(b.downtime_start, new Date().toISOString());
             return (
-              <div key={b.id} style={{ background: C.card, border: `1px solid ${isResolved ? C.green+"44" : C.red+"44"}`, borderRadius: 10, padding: 20 }}>
+              <div key={b.id} style={{ background: C.card, border: `1px solid ${isResolved ? C.green+"44" : isAcknowledged ? C.blue+"44" : C.red+"44"}`, borderRadius: 10, padding: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 18 }}>{isResolved ? "✅" : "🚨"}</span>
+                      <span style={{ fontSize: 18 }}>{isResolved ? "✅" : isAcknowledged ? "👁" : "🚨"}</span>
                       <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{b.asset_name}</div>
                     </div>
                     <div style={{ fontSize: 12, color: C.muted }}>{b.site} · Reported by {b.reported_by} · {fmtDateTime(b.reported_at)}</div>
+                    {isAcknowledged && b.acknowledged_by && (
+                      <div style={{ fontSize: 12, color: C.blue, marginTop: 4 }}>👁 Acknowledged by {b.acknowledged_by} · {fmtDateTime(b.acknowledged_at)}</div>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <Badge label={b.severity} color={SEVERITY_COLORS[b.severity] || C.muted} />
@@ -408,7 +436,7 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
                   </div>
                   <div style={{ background: C.purple+"11", border: `1px solid ${C.purple}33`, borderRadius: 8, padding: "10px 16px" }}>
                     <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>⏱ Downtime</div>
-                    <div style={{ fontSize: 13, color: C.purple, fontWeight: 700 }}>{currentDowntime}h ({Math.round(currentDowntime/24)}d)</div>
+                    <div style={{ fontSize: 13, color: C.purple, fontWeight: 700 }}>{formatDowntime(currentDowntimeMins)}</div>
                   </div>
                 </div>
 
@@ -424,9 +452,12 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
                   </div>
                 )}
 
-                {/* Actions */}
+                {/* Actions for maintenance/admin */}
                 {!isResolved && (userRole.role === "maintenance" || userRole.role === "admin") && (
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {b.status === "Open" && (
+                      <Btn onClick={() => acknowledge(b)} color={C.blue}>👁 Acknowledge</Btn>
+                    )}
                     <Btn onClick={() => setResolveItem(b)} color={C.green}>✅ Mark as Resolved</Btn>
                   </div>
                 )}
