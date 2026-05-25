@@ -402,8 +402,8 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
             const isResolved = b.status === "Resolved";
             const isAcknowledged = b.status === "Acknowledged";
             const currentDowntimeMins = isResolved
-              ? Math.round((b.downtime_hours || 0) * 60)
-              : minutesBetween(b.downtime_start, new Date().toISOString());
+  ? Math.round((b.downtime_hours || 0) * 60)
+  : minutesBetween(b.downtime_start, new Date().toISOString()) || 0;
             return (
               <div key={b.id} style={{ background: C.card, border: `1px solid ${isResolved ? C.green+"44" : isAcknowledged ? C.blue+"44" : C.red+"44"}`, borderRadius: 10, padding: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
