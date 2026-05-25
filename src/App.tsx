@@ -223,7 +223,8 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     if (!form.maintenance_notes) { setError("Please add maintenance notes."); return; }
     setSaving(true); setError(null);
     const now = new Date().toISOString();
-    const hours = minutesBetween(breakdown.downtime_start, now) / 60;
+    const totalMinutes = minutesBetween(breakdown.downtime_start, now);
+const hours = totalMinutes / 60;
 
     // Update breakdown report
     await supabase.from("breakdown_reports").update({
@@ -402,7 +403,7 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
             const isResolved = b.status === "Resolved";
             const isAcknowledged = b.status === "Acknowledged";
             const currentDowntimeMins = isResolved
-  ? Math.round((b.downtime_hours || 0) * 60)
+  ? Math.round(b.downtime_hours || 0)
   : minutesBetween(b.downtime_start, new Date().toISOString()) || 0;
             return (
               <div key={b.id} style={{ background: C.card, border: `1px solid ${isResolved ? C.green+"44" : isAcknowledged ? C.blue+"44" : C.red+"44"}`, borderRadius: 10, padding: 20 }}>
