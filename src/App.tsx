@@ -37,7 +37,12 @@ const fmt = (n) => n ? `$${Number(n).toLocaleString()}` : "—";
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
 const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 const hoursBetween = (a, b) => a && b ? Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60)) : null;
-const minutesBetween = (a, b) => a && b ? Math.round((new Date(b) - new Date(a)) / (1000 * 60)) : null;
+const minutesBetween = (a, b) => {
+  if (!a || !b) return null;
+  const dateA = new Date(a.endsWith('Z') ? a : a + 'Z');
+  const dateB = new Date(b.endsWith('Z') ? b : b + 'Z');
+  return Math.round((dateB - dateA) / (1000 * 60));
+};
 const formatDowntime = (minutes) => {
   if (!minutes) return "—";
   if (minutes < 60) return `${minutes} min`;
