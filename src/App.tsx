@@ -328,7 +328,7 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const openCount = breakdowns.filter(b => b.status === "Open").length;
   const acknowledgedCount = breakdowns.filter(b => b.status === "Acknowledged").length;
   const resolvedCount = breakdowns.filter(b => b.status === "Resolved").length;
-  const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours * 60), 0);
+  const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0);
 
   const onReported = (record) => {
     setBreakdowns(prev => [record, ...prev]);
