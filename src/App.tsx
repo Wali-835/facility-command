@@ -44,7 +44,8 @@ const minutesBetween = (a, b) => {
   return Math.round((dateB - dateA) / (1000 * 60));
 };
 const formatDowntime = (minutes) => {
-  if (!minutes) return "—";
+  if (minutes === null || minutes === undefined) return "—";
+  if (minutes === 0) return "< 1 min";
   if (minutes < 60) return `${minutes} min`;
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
