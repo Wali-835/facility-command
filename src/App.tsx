@@ -274,7 +274,7 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
             <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Reported by:</strong> {breakdown.reported_by}</div>
             <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Reported at:</strong> {fmtDateTime(breakdown.reported_at)}</div>
             <div style={{ fontSize: 13, color: C.text, marginBottom: 6 }}><strong>Issue:</strong> {breakdown.description}</div>
-            <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700 }}>⏱ Current downtime: {formatDowntime(downtimeMins)}
+            <div style={{ fontSize: 13, color: C.yellow, fontWeight: 700 }}>⏱ Current downtime: {formatDowntime(downtimeMins)}</div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Input label="Resolved By (Technician) *" value={form.resolved_by} onChange={f("resolved_by")} placeholder="Your full name" />
