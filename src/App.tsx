@@ -35,7 +35,11 @@ const statusColor = (s) => ({
 
 const fmt = (n) => n ? `$${Number(n).toLocaleString()}` : "—";
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
-const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+const fmtDateTime = (d) => {
+  if (!d) return "—";
+  const date = new Date(d.endsWith('Z') ? d : d + 'Z');
+  return date.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" });
+};
 const hoursBetween = (a, b) => a && b ? Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60)) : null;
 const minutesBetween = (a, b) => {
   if (!a || !b) return null;
@@ -229,8 +233,7 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     if (!form.maintenance_notes) { setError("Please add maintenance notes."); return; }
     setSaving(true); setError(null);
     const now = new Date().toISOString();
-    const totalMinutes = minutesBetween(breakdown.downtime_start, now);
-const hours = totalMinutes / 60;
+    const hours = minutesBetween(breakdown.downtime_start, now);
 
     // Update breakdown report
     await supabase.from("breakdown_reports").update({
