@@ -1104,9 +1104,10 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
               </div>
               <Stars rating={v.rating} />
               <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
-                {[["Contact",v.contact],["Phone",v.phone],["Email",v.email],["Open Orders",v.open_orders]].map(([lbl,val]) => (
-                  <div key={lbl}><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>{lbl}</div><div style={{ color: C.subtle, marginTop: 2 }}>{val||"—"}</div></div>
-                ))}
+                {[["Contact",v.contact],["Phone",v.phone],["Email",v.email]].map(([lbl,val]) => (
+  <div key={lbl}><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>{lbl}</div><div style={{ color: C.subtle, marginTop: 2 }}>{val||"—"}</div></div>
+))}
+<div><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>Open Orders</div><div style={{ color: (v.open_orders||0)>0?C.accent:C.subtle, marginTop: 2, fontWeight: (v.open_orders||0)>0?700:400 }}>{v.open_orders||0}</div></div>
               </div>
               {isAdmin && <div style={{ display: "flex", gap: 8, marginTop: 14 }}><Btn small onClick={() => setEditItem(v)} color={C.blue}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(v)}>Delete</Btn></div>}
             </div>
