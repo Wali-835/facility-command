@@ -904,10 +904,33 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
     setSaving(true); setError(null);
     const record = { id: uid("WO"), title: form.title, asset: form.asset, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: form.vendor==="— None —"?null:form.vendor||null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
-    if (err) { setError(err.message); } else { onAdd(record); setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" }); setShowForm(false); }
+if (err) { setError(err.message); } else {
+  onAdd(record);
+  // Update vendor open orders count
+  if (record.vendor) {
+    const { data: vendorData } = await supabase.from("vendors").select("id, open_orders").eq("name", record.vendor).single();
+    if (vendorData) await supabase.from("vendors").update({ open_orders: (vendorData.open_orders || 0) + 1 }).eq("id", vendorData.id);
+  }
+  setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
+  setShowForm(false);
+}
     setSaving(false);
   };
-  const updateStatus = async (id,val) => { await supabase.from("work_orders").update({ status: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,status:val}:wo)); };
+  const updateStatus = async (id, val) => {
+  const wo = workOrders.find(w => w.id === id);
+  await supabase.from("work_orders").update({ status: val }).eq("id", id);
+  setWorkOrders(prev => prev.map(w => w.id === id ? { ...w, status: val } : w));
+  // Update vendor open orders when completing
+  if (wo?.vendor && val === "Completed" && wo.status !== "Completed") {
+    const { data: vendorData } = await supabase.from("vendors").select("id, open_orders").eq("name", wo.vendor).single();
+    if (vendorData) await supabase.from("vendors").update({ open_orders: Math.max(0, (vendorData.open_orders || 0) - 1) }).eq("id", vendorData.id);
+  }
+  // Increase when reopening
+  if (wo?.vendor && wo.status === "Completed" && val !== "Completed") {
+    const { data: vendorData } = await supabase.from("vendors").select("id, open_orders").eq("name", wo.vendor).single();
+    if (vendorData) await supabase.from("vendors").update({ open_orders: (vendorData.open_orders || 0) + 1 }).eq("id", vendorData.id);
+  }
+};
   const updatePriority = async (id,val) => { await supabase.from("work_orders").update({ priority: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,priority:val}:wo)); };
   const saveEdit = async (updated) => { const { error: err } = await supabase.from("work_orders").update(updated).eq("id",updated.id); if (!err) { setWorkOrders(prev => prev.map(wo => wo.id===updated.id?updated:wo)); setEditItem(null); } else setError(err.message); };
   const confirmDelete = async () => { await supabase.from("work_orders").delete().eq("id",deleteItem.id); setWorkOrders(prev => prev.filter(wo => wo.id!==deleteItem.id)); setDeleteItem(null); };
