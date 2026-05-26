@@ -907,9 +907,13 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
 if (err) { setError(err.message); } else {
   onAdd(record);
   // Update vendor open orders count
-  if (record.vendor) {
-    const { data: vendorData } = await supabase.from("vendors").select("id, open_orders").eq("name", record.vendor).single();
-    if (vendorData) await supabase.from("vendors").update({ open_orders: (vendorData.open_orders || 0) + 1 }).eq("id", vendorData.id);
+ if (record.vendor) {
+    const { data: vendorData, error: vendorErr } = await supabase.from("vendors").select("id, open_orders").eq("name", record.vendor).single();
+    console.log("Vendor lookup:", record.vendor, vendorData, vendorErr);
+    if (vendorData) {
+      const { error: updateErr } = await supabase.from("vendors").update({ open_orders: (vendorData.open_orders || 0) + 1 }).eq("id", vendorData.id);
+      console.log("Vendor update error:", updateErr);
+    }
   }
   setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
   setShowForm(false);
