@@ -31,9 +31,7 @@ jobs:
           VITE_ADMIN_EMAIL: ${{ secrets.VITE_ADMIN_EMAIL }}
 
       - name: Deploy
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add dist -f
-          git commit -m "Deploy to gh-pages" || exit 0
-          git subtree push --prefix dist origin gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
