@@ -1061,10 +1061,97 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
     </div>
   );
 }
+function VendorWorkOrdersModal({ vendor, onClose }) {
+  const [workOrders, setWorkOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("All");
 
+  useEffect(() => { loadWorkOrders(); }, [vendor.id]);
+
+  const loadWorkOrders = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("work_orders").select("*")
+      .eq("vendor", vendor.name).order("due", { ascending: false });
+    setWorkOrders(data || []);
+    setLoading(false);
+  };
+
+  const filtered = filter === "All" ? workOrders : workOrders.filter(w => w.status === filter);
+  const open = workOrders.filter(w => w.status !== "Completed").length;
+  const completed = workOrders.filter(w => w.status === "Completed").length;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 820, marginTop: 20, marginBottom: 20 }}>
+        
+        {/* Header */}
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{vendor.name}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{vendor.specialty}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+
+        {/* Stats */}
+        <div style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {[
+            ["📋", workOrders.length, "Total Work Orders", C.blue],
+            ["🔓", open, "Open / In Progress", C.accent],
+            ["✅", completed, "Completed", C.green],
+          ].map(([icon, val, label, color]) => (
+            <div key={label} style={{ background: C.surface, borderRadius: 8, padding: "10px 16px", flex: "1 1 130px", borderLeft: `3px solid ${color}` }}>
+              <div style={{ fontSize: 16 }}>{icon}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{val}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: 24 }}>
+          {/* Filter */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
+            {["All", "Open", "In Progress", "Pending", "Completed"].map(s => (
+              <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.surface, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{s}</button>
+            ))}
+          </div>
+
+          {/* Work Orders Table */}
+          {loading ? <Spinner /> : filtered.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>No work orders found.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {["Title", "Asset", "Priority", "Status", "Start", "Due"].map(h => (
+                      <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((wo, i) => (
+                    <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                      <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
+                      <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
+                      <td style={{ padding: "10px 12px" }}><Badge label={wo.priority} color={priorityColor(wo.priority)} /></td>
+                      <td style={{ padding: "10px 12px" }}><Badge label={wo.status} color={statusColor(wo.status)} /></td>
+                      <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.start_date || "—"}</td>
+                      <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due && wo.due <= TODAY && wo.status !== "Completed" ? C.red : C.subtle }}>{wo.due || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null);
+  const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null); const [selectedVendor, setSelectedVendor] = useState(null);
   const [form, setForm] = useState({ name: "", specialty: "", contact: "", phone: "", email: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const submit = async () => {
@@ -1080,6 +1167,7 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
   const Stars = ({ rating }) => <div style={{ display: "flex", gap: 2 }}>{[1,2,3,4,5].map(i => <span key={i} style={{ color: i<=Math.floor(rating)?C.yellow:C.border, fontSize: 14 }}>*</span>)}<span style={{ fontSize: 11, color: C.muted, marginLeft: 4 }}>{rating>0?Number(rating).toFixed(1):"N/A"}</span></div>;
   return (
     <div>
+      {selectedVendor && <VendorWorkOrdersModal vendor={selectedVendor} onClose={() => setSelectedVendor(null)} />}
       {editItem && <EditModal title="Vendor" data={editItem} fields={[{key:"name",label:"Company Name"},{key:"specialty",label:"Specialty"},{key:"contact",label:"Contact"},{key:"phone",label:"Phone"},{key:"email",label:"Email"},{key:"status",label:"Status",options:["Active","Inactive"]},{key:"rating",label:"Rating (0-5)"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
@@ -1109,7 +1197,10 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
 ))}
 <div><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>Open Orders</div><div style={{ color: (v.open_orders||0)>0?C.accent:C.subtle, marginTop: 2, fontWeight: (v.open_orders||0)>0?700:400 }}>{v.open_orders||0}</div></div>
               </div>
-              {isAdmin && <div style={{ display: "flex", gap: 8, marginTop: 14 }}><Btn small onClick={() => setEditItem(v)} color={C.blue}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(v)}>Delete</Btn></div>}
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+  <button onClick={() => setSelectedVendor(v)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📋 Work Orders</button>
+  {isAdmin && <><Btn small onClick={() => setEditItem(v)} color={C.accent}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(v)}>Delete</Btn></>}
+</div>
             </div>
           ))}
           {vendors.length===0 && <div style={{ color: C.muted, fontSize: 13 }}>No vendors yet.</div>}
