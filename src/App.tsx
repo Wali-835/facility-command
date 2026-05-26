@@ -902,18 +902,14 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   const submit = async () => {
     if (!form.title||!form.asset) { setError("Title and Asset are required."); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: form.vendor==="— None —"?null:form.vendor||null };
-    const { error: err } = await supabase.from("work_orders").insert([record]);
+    const vendorName = form.vendor === "— None —" || !form.vendor ? null : form.vendor;
+const record = { id: uid("WO"), title: form.title, asset: form.asset, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName };
+const { error: err } = await supabase.from("work_orders").insert([record]);
 if (err) { setError(err.message); } else {
   onAdd(record);
-  // Update vendor open orders count
- if (record.vendor) {
-    const { data: vendorData, error: vendorErr } = await supabase.from("vendors").select("id, open_orders").eq("name", record.vendor).single();
-    console.log("Vendor lookup:", record.vendor, vendorData, vendorErr);
-    if (vendorData) {
-      const { error: updateErr } = await supabase.from("vendors").update({ open_orders: (vendorData.open_orders || 0) + 1 }).eq("id", vendorData.id);
-      console.log("Vendor update error:", updateErr);
-    }
+  if (vendorName) {
+    const { data: vd } = await supabase.from("vendors").select("id, open_orders").eq("name", vendorName).single();
+    if (vd) await supabase.from("vendors").update({ open_orders: (vd.open_orders || 0) + 1 }).eq("id", vd.id).then(() => {});
   }
   setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
   setShowForm(false);
