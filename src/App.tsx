@@ -1197,7 +1197,7 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin }) {
 ))}
 <div><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>Open Orders</div><div style={{ color: (v.open_orders||0)>0?C.accent:C.subtle, marginTop: 2, fontWeight: (v.open_orders||0)>0?700:400 }}>{v.open_orders||0}</div></div>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
   <button onClick={() => setSelectedVendor(v)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📋 Work Orders</button>
   {isAdmin && <><Btn small onClick={() => setEditItem(v)} color={C.accent}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(v)}>Delete</Btn></>}
 </div>
