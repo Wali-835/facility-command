@@ -1531,7 +1531,7 @@ const doc = new jsPDF();
     doc.setFont("helvetica", "bold");
     doc.text("KPI Summary", 14, 40);
 
-    autoTable(doc, {
+    doc.autoTable({
       startY: 44,
       head: [["KPI", "Value"]],
       body: [
@@ -1556,7 +1556,7 @@ const doc = new jsPDF();
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
     doc.text("Work Orders", 14, 20);
-    autoTable(doc, {
+    doc.autoTable({
       startY: 24,
       head: [["Title", "Asset", "Priority", "Status", "Vendor", "Due"]],
       body: workOrders.slice(0, 50).map(wo => [wo.title, wo.asset, wo.priority, wo.status, wo.vendor || "—", wo.due || "—"]),
@@ -1571,7 +1571,7 @@ const doc = new jsPDF();
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
     doc.text("Assets", 14, 20);
-    autoTable(doc, {
+    doc.autoTable({
       startY: 24,
       head: [["Name", "Category", "Site", "Status", "PM Every", "Last PM"]],
       body: assets.slice(0, 50).map(a => [a.name, a.category || "—", a.location, a.status, a.pm_frequency ? `${a.pm_frequency} mo.` : "—", a.last_pm_date ? fmtDate(a.last_pm_date) : "Never"]),
@@ -1586,7 +1586,7 @@ const doc = new jsPDF();
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
     doc.text("Vendors", 14, 20);
-    autoTable(doc, {
+    doc.autoTable({
       startY: 24,
       head: [["Name", "Specialty", "Contact", "Phone", "Status", "Open Orders", "Rating"]],
       body: vendors.map(v => [v.name, v.specialty || "—", v.contact || "—", v.phone || "—", v.status, v.open_orders || 0, v.rating > 0 ? v.rating.toFixed(1) : "N/A"]),
