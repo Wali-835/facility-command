@@ -1444,6 +1444,159 @@ function Overview({ workOrders, assets, vendors, breakdownCount }) {
 
 // ─── USER MANAGEMENT (Admin only) ────────────────────────────────────────────
 function Reports({ workOrders, assets, vendors }) {
+  const exportToExcel = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Work Orders sheet
+    const woData = workOrders.map(wo => ({
+      "ID": wo.id, "Title": wo.title, "Asset": wo.asset,
+      "Priority": wo.priority, "Status": wo.status,
+      "Vendor": wo.vendor || "—", "Start Date": wo.start_date || "—",
+      "Due Date": wo.due || "—",
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(woData), "Work Orders");
+
+    // Assets sheet
+    const assetData = assets.map(a => ({
+      "ID": a.id, "Name": a.name, "Category": a.category,
+      "Site": a.location, "Status": a.status, "Value": a.value || "—",
+      "PM Frequency (months)": a.pm_frequency || "—",
+      "Last PM": a.last_pm_date || "Never",
+      "Next Service": a.next_service || "—",
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(assetData), "Assets");
+
+    // Vendors sheet
+    const vendorData = vendors.map(v => ({
+      "Name": v.name, "Specialty": v.specialty || "—",
+      "Contact": v.contact || "—", "Phone": v.phone || "—",
+      "Email": v.email || "—", "Status": v.status,
+      "Rating": v.rating || "N/A", "Open Orders": v.open_orders || 0,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vendorData), "Vendors");
+
+    // KPI Summary sheet
+    const totalWOs = workOrders.length;
+    const completedWOs = workOrders.filter(w => w.status === "Completed").length;
+    const overdueWOs = workOrders.filter(w => w.due && w.due <= TODAY && w.status !== "Completed").length;
+    const operationalAssets = assets.filter(a => a.status === "Operational").length;
+    const pmDue = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now = new Date(); const last = new Date(a.last_pm_date); return (now.getFullYear() - last.getFullYear()) * 12 + (now.getMonth() - last.getMonth()) >= a.pm_frequency; }).length;
+
+    const kpiData = [
+      { "KPI": "Total Work Orders", "Value": totalWOs },
+      { "KPI": "Completed Work Orders", "Value": completedWOs },
+      { "KPI": "Work Order Completion Rate", "Value": `${totalWOs > 0 ? Math.round((completedWOs/totalWOs)*100) : 0}%` },
+      { "KPI": "Overdue Work Orders", "Value": overdueWOs },
+      { "KPI": "Total Assets", "Value": assets.length },
+      { "KPI": "Operational Assets", "Value": operationalAssets },
+      { "KPI": "Asset Uptime Rate", "Value": `${assets.length > 0 ? Math.round((operationalAssets/assets.length)*100) : 0}%` },
+      { "KPI": "Assets Under Maintenance", "Value": assets.filter(a => a.status === "Under Maintenance").length },
+      { "KPI": "PM Compliance Rate", "Value": `${assets.length > 0 ? Math.round(((assets.length-pmDue)/assets.length)*100) : 0}%` },
+      { "KPI": "Assets Due for PM", "Value": pmDue },
+      { "KPI": "Active Vendors", "Value": vendors.filter(v => v.status === "Active").length },
+      { "KPI": "Total Open Vendor Orders", "Value": vendors.reduce((s, v) => s + (v.open_orders || 0), 0) },
+      { "KPI": "Report Generated", "Value": new Date().toLocaleString("en-GB") },
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kpiData), "KPI Summary");
+
+    XLSX.writeFile(wb, `Facility_Report_${TODAY}.xlsx`);
+  };
+
+  const exportToPDF = async () => {
+    const { default: jsPDF } = await import("jspdf");
+    const { default: autoTable } = await import("jspdf-autotable");
+    const doc = new jsPDF();
+    const totalWOs = workOrders.length;
+    const completedWOs = workOrders.filter(w => w.status === "Completed").length;
+    const overdueWOs = workOrders.filter(w => w.due && w.due <= TODAY && w.status !== "Completed").length;
+    const operationalAssets = assets.filter(a => a.status === "Operational").length;
+    const pmDue = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now = new Date(); const last = new Date(a.last_pm_date); return (now.getFullYear() - last.getFullYear()) * 12 + (now.getMonth() - last.getMonth()) >= a.pm_frequency; }).length;
+
+    // Header
+    doc.setFillColor(249, 115, 22);
+    doc.rect(0, 0, 220, 28, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("FACILITY COMMAND", 14, 12);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Industrial Warehouse Management Report", 14, 20);
+    doc.text(`Generated: ${new Date().toLocaleString("en-GB")}`, 14, 26);
+
+    // KPI Summary
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("KPI Summary", 14, 40);
+
+    autoTable(doc, {
+      startY: 44,
+      head: [["KPI", "Value"]],
+      body: [
+        ["Total Work Orders", totalWOs],
+        ["Completed Work Orders", completedWOs],
+        ["Completion Rate", `${totalWOs > 0 ? Math.round((completedWOs/totalWOs)*100) : 0}%`],
+        ["Overdue Work Orders", overdueWOs],
+        ["Total Assets", assets.length],
+        ["Operational Assets", operationalAssets],
+        ["Asset Uptime Rate", `${assets.length > 0 ? Math.round((operationalAssets/assets.length)*100) : 0}%`],
+        ["PM Compliance Rate", `${assets.length > 0 ? Math.round(((assets.length-pmDue)/assets.length)*100) : 0}%`],
+        ["Assets Due for PM", pmDue],
+        ["Active Vendors", vendors.filter(v => v.status === "Active").length],
+      ],
+      headStyles: { fillColor: [249, 115, 22], textColor: 255 },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+      margin: { left: 14, right: 14 },
+    });
+
+    // Work Orders Table
+    doc.addPage();
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Work Orders", 14, 20);
+    autoTable(doc, {
+      startY: 24,
+      head: [["Title", "Asset", "Priority", "Status", "Vendor", "Due"]],
+      body: workOrders.slice(0, 50).map(wo => [wo.title, wo.asset, wo.priority, wo.status, wo.vendor || "—", wo.due || "—"]),
+      headStyles: { fillColor: [249, 115, 22], textColor: 255 },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+      margin: { left: 14, right: 14 },
+      styles: { fontSize: 9 },
+    });
+
+    // Assets Table
+    doc.addPage();
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Assets", 14, 20);
+    autoTable(doc, {
+      startY: 24,
+      head: [["Name", "Category", "Site", "Status", "PM Every", "Last PM"]],
+      body: assets.slice(0, 50).map(a => [a.name, a.category || "—", a.location, a.status, a.pm_frequency ? `${a.pm_frequency} mo.` : "—", a.last_pm_date ? fmtDate(a.last_pm_date) : "Never"]),
+      headStyles: { fillColor: [249, 115, 22], textColor: 255 },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+      margin: { left: 14, right: 14 },
+      styles: { fontSize: 9 },
+    });
+
+    // Vendors Table
+    doc.addPage();
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Vendors", 14, 20);
+    autoTable(doc, {
+      startY: 24,
+      head: [["Name", "Specialty", "Contact", "Phone", "Status", "Open Orders", "Rating"]],
+      body: vendors.map(v => [v.name, v.specialty || "—", v.contact || "—", v.phone || "—", v.status, v.open_orders || 0, v.rating > 0 ? v.rating.toFixed(1) : "N/A"]),
+      headStyles: { fillColor: [249, 115, 22], textColor: 255 },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+      margin: { left: 14, right: 14 },
+      styles: { fontSize: 9 },
+    });
+
+    doc.save(`Facility_Report_${TODAY}.pdf`);
+  };
   const [period, setPeriod] = useState("month");
   const [breakdowns, setBreakdowns] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -1569,7 +1722,13 @@ function Reports({ workOrders, assets, vendors }) {
     <div>
       {/* Period Selector */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 10 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>📊 Reports & KPI Dashboard</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>📊 Reports & KPI Dashboard</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportToExcel} style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Excel</button>
+            <button onClick={exportToPDF} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 PDF</button>
+          </div>
+        </div>
         <div style={{ display: "flex", gap: 6 }}>
           {[["month", "This Month"], ["quarter", "3 Months"], ["half", "6 Months"], ["all", "All Time"]].map(([val, label]) => (
             <button key={val} onClick={() => setPeriod(val)} style={{ background: period===val?C.accent:C.card, color: period===val?"#fff":C.muted, border: `1px solid ${period===val?C.accent:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{label}</button>
