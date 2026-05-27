@@ -891,11 +891,107 @@ function LoginScreen() {
     </div>
   );
 }
+function WorkOrderPhotosModal({ workOrder, onClose }) {
+  const [photos, setPhotos] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
 
+  useEffect(() => { loadPhotos(); }, [workOrder.id]);
+
+  const loadPhotos = async () => {
+    const { data } = await supabase.storage.from("work-order-photos").list(workOrder.id);
+    if (data) {
+      const urls = data.map(file => ({
+        name: file.name,
+        url: supabase.storage.from("work-order-photos").getPublicUrl(`${workOrder.id}/${file.name}`).data.publicUrl,
+      }));
+      setPhotos(urls);
+    }
+  };
+
+  const uploadPhoto = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { setError("File too large. Max 5MB."); return; }
+    setUploading(true); setError(null);
+    const fileName = `${Date.now()}-${file.name}`;
+    const { error: err } = await supabase.storage.from("work-order-photos").upload(`${workOrder.id}/${fileName}`, file);
+    if (err) { setError(err.message); } else {
+      setSuccess("Photo uploaded!");
+      await loadPhotos();
+    }
+    setUploading(false);
+  };
+
+  const deletePhoto = async (name) => {
+    await supabase.storage.from("work-order-photos").remove([`${workOrder.id}/${name}`]);
+    setPhotos(prev => prev.filter(p => p.name !== name));
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 720, marginTop: 20, marginBottom: 20 }}>
+        
+        {/* Header */}
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>📷 Photos — {workOrder.title}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{workOrder.asset} · {workOrder.id}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+
+          {/* Upload Button */}
+          <div style={{ marginBottom: 24 }}>
+            <label style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              background: C.accent, color: "#fff", borderRadius: 6,
+              padding: "10px 20px", fontSize: 13, fontWeight: 700,
+              cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.7 : 1,
+            }}>
+              {uploading ? "⏳ Uploading..." : "📷 Upload Photo"}
+              <input type="file" accept="image/*" onChange={uploadPhoto} style={{ display: "none" }} disabled={uploading} />
+            </label>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Max 5MB per photo. JPG, PNG, WEBP supported.</div>
+          </div>
+
+          {/* Photos Grid */}
+          {photos.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>
+              No photos yet. Upload the first photo for this work order.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14 }}>
+              {photos.map(photo => (
+                <div key={photo.name} style={{ background: C.surface, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+                  <img
+                    src={photo.url}
+                    alt={photo.name}
+                    style={{ width: "100%", height: 160, objectFit: "cover", display: "block", cursor: "pointer" }}
+                    onClick={() => window.open(photo.url, "_blank")}
+                  />
+                  <div style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140 }}>{photo.name}</div>
+                    <Btn small variant="danger" onClick={() => deletePhoto(photo.name)}>Del</Btn>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [filter, setFilter] = useState("All");
-  const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null);
+  const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null); const [selectedWO, setSelectedWO] = useState(null);
   const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const filtered = filter==="All" ? workOrders : workOrders.filter(w => w.status===filter);
@@ -937,6 +1033,7 @@ if (err) { setError(err.message); } else {
   const confirmDelete = async () => { await supabase.from("work_orders").delete().eq("id",deleteItem.id); setWorkOrders(prev => prev.filter(wo => wo.id!==deleteItem.id)); setDeleteItem(null); };
   return (
     <div>
+      {selectedWO && <WorkOrderPhotosModal workOrder={selectedWO} onClose={() => setSelectedWO(null)} />}
       {editItem && <EditModal title="Work Order" data={editItem} fields={[{key:"title",label:"Title"},{key:"asset",label:"Asset"},{key:"priority",label:"Priority",options:["Critical","High","Medium","Low"]},{key:"status",label:"Status",options:["Open","In Progress","Pending","Completed"]},{key:"vendor",label:"Vendor",options:vendorOptions},{key:"assignee",label:"Assignee"},{key:"start_date",label:"Start Date",type:"date"},{key:"due",label:"Due Date",type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
@@ -960,7 +1057,7 @@ if (err) { setError(err.message); } else {
       {loading ? <Spinner /> : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
-            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["ID","Title","Asset","Priority","Status","Vendor","Start","Due",...(isAdmin?["Actions"]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["ID","Title","Asset","Priority","Status","Vendor","Start","Due","📷",...(isAdmin?["Actions"]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>)}</tr></thead>
             <tbody>
               {filtered.map((wo,i) => (
                 <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
@@ -972,10 +1069,15 @@ if (err) { setError(err.message); } else {
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor||"—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.start_date||"—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>{wo.due||"—"}</td>
-                  {isAdmin && <td style={{ padding: "10px 12px" }}><div style={{ display: "flex", gap: 6 }}><Btn small onClick={() => setEditItem(wo)} color={C.blue}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(wo)}>Del</Btn></div></td>}
+                  <td style={{ padding: "10px 12px" }}>
+  <div style={{ display: "flex", gap: 6 }}>
+    <Btn small onClick={() => setSelectedWO(wo)} color={C.purple}>📷</Btn>
+    {isAdmin && <><Btn small onClick={() => setEditItem(wo)} color={C.blue}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(wo)}>Del</Btn></>}
+  </div>
+</td>
                 </tr>
               ))}
-              {filtered.length===0 && <tr><td colSpan={isAdmin?9:8} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
+              {filtered.length===0 && <tr><td colSpan={isAdmin?10:9} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No work orders found.</td></tr>}
             </tbody>
           </table>
         </div>
