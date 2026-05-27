@@ -1,5 +1,5 @@
 // v2 - vendor work orders
-import { useState, useEffect, useCallback } from "react";import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabase";
 
