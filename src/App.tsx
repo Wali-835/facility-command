@@ -1443,6 +1443,239 @@ function Overview({ workOrders, assets, vendors, breakdownCount }) {
 }
 
 // ─── USER MANAGEMENT (Admin only) ────────────────────────────────────────────
+function Reports({ workOrders, assets, vendors }) {
+  const [period, setPeriod] = useState("month");
+  const [breakdowns, setBreakdowns] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { loadData(); }, [period]);
+
+  const loadData = async () => {
+    setLoading(true);
+    const now = new Date();
+    let fromDate;
+    if (period === "month") fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    else if (period === "quarter") fromDate = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+    else if (period === "half") fromDate = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+    else fromDate = new Date(2000, 0, 1);
+
+    const fromStr = fromDate.toISOString();
+    const [bRes, lRes] = await Promise.all([
+      supabase.from("breakdown_reports").select("*").gte("reported_at", fromStr),
+      supabase.from("maintenance_logs").select("*").gte("start_date", fromStr.split("T")[0]),
+    ]);
+    setBreakdowns(bRes.data || []);
+    setLogs(lRes.data || []);
+    setLoading(false);
+  };
+
+  // ── Work Order KPIs ──
+  const totalWOs = workOrders.length;
+  const completedWOs = workOrders.filter(w => w.status === "Completed").length;
+  const overdueWOs = workOrders.filter(w => w.due && w.due <= TODAY && w.status !== "Completed").length;
+  const completionRate = totalWOs > 0 ? Math.round((completedWOs / totalWOs) * 100) : 0;
+  const woByStatus = [
+    { label: "Open", count: workOrders.filter(w => w.status === "Open").length, color: C.accent },
+    { label: "In Progress", count: workOrders.filter(w => w.status === "In Progress").length, color: C.blue },
+    { label: "Pending", count: workOrders.filter(w => w.status === "Pending").length, color: C.yellow },
+    { label: "Completed", count: completedWOs, color: C.green },
+  ];
+
+  // ── Asset KPIs ──
+  const totalAssets = assets.length;
+  const operationalAssets = assets.filter(a => a.status === "Operational").length;
+  const downtimeAssets = assets.filter(a => a.status === "Under Maintenance").length;
+  const degradedAssets = assets.filter(a => a.status === "Degraded").length;
+  const uptimeRate = totalAssets > 0 ? Math.round((operationalAssets / totalAssets) * 100) : 0;
+  const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0);
+
+  // ── PM KPIs ──
+  const pmDue = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now = new Date(); const last = new Date(a.last_pm_date); return (now.getFullYear() - last.getFullYear()) * 12 + (now.getMonth() - last.getMonth()) >= a.pm_frequency; }).length;
+  const pmCompliance = totalAssets > 0 ? Math.round(((totalAssets - pmDue) / totalAssets) * 100) : 0;
+  const pmLogs = logs.filter(l => l.log_type === "Preventive Maintenance").length;
+  const correctiveLogs = logs.filter(l => l.log_type === "Corrective Repair").length;
+
+  // ── Vendor KPIs ──
+  const activeVendors = vendors.filter(v => v.status === "Active").length;
+  const vendorWOs = vendors.map(v => ({
+    name: v.name,
+    open: workOrders.filter(w => w.vendor === v.name && w.status !== "Completed").length,
+    completed: workOrders.filter(w => w.vendor === v.name && w.status === "Completed").length,
+    rating: v.rating,
+  })).filter(v => v.open + v.completed > 0).sort((a, b) => (b.open + b.completed) - (a.open + a.completed));
+
+  // ── Breakdown KPIs ──
+  const totalBreakdowns = breakdowns.length;
+  const resolvedBreakdowns = breakdowns.filter(b => b.status === "Resolved").length;
+  const avgDowntime = resolvedBreakdowns > 0
+    ? Math.round(breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0) / resolvedBreakdowns)
+    : 0;
+
+  // ── Assets by Site ──
+  const siteData = SITES.filter(s => s !== "— Select Site —").map(site => ({
+    site,
+    total: assets.filter(a => a.location === site).length,
+    operational: assets.filter(a => a.location === site && a.status === "Operational").length,
+    down: assets.filter(a => a.location === site && a.status === "Under Maintenance").length,
+  })).filter(s => s.total > 0);
+
+  const KpiCard = ({ icon, label, value, sub, color, percent }) => (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, borderLeft: `4px solid ${color}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{icon} {label}</div>
+          <div style={{ fontSize: 32, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{value}</div>
+          {sub && <div style={{ fontSize: 12, color: C.subtle, marginTop: 4 }}>{sub}</div>}
+        </div>
+        {percent !== undefined && (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "monospace" }}>{percent}%</div>
+            <div style={{ fontSize: 10, color: C.muted }}>rate</div>
+          </div>
+        )}
+      </div>
+      {percent !== undefined && (
+        <div style={{ marginTop: 12, background: C.border, borderRadius: 4, height: 6 }}>
+          <div style={{ background: color, width: `${percent}%`, height: 6, borderRadius: 4, transition: "width 0.6s" }} />
+        </div>
+      )}
+    </div>
+  );
+
+  const BarChart = ({ data, valueKey, labelKey, colorKey, title }) => {
+    const max = Math.max(...data.map(d => d[valueKey]), 1);
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>{title}</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {data.map((d, i) => (
+            <div key={i}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                <span style={{ color: C.subtle }}>{d[labelKey]}</span>
+                <span style={{ color: d[colorKey] || C.accent, fontWeight: 700 }}>{d[valueKey]}</span>
+              </div>
+              <div style={{ background: C.border, borderRadius: 4, height: 8 }}>
+                <div style={{ background: d[colorKey] || C.accent, width: `${(d[valueKey] / max) * 100}%`, height: 8, borderRadius: 4, transition: "width 0.6s" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {/* Period Selector */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>📊 Reports & KPI Dashboard</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[["month", "This Month"], ["quarter", "3 Months"], ["half", "6 Months"], ["all", "All Time"]].map(([val, label]) => (
+            <button key={val} onClick={() => setPeriod(val)} style={{ background: period===val?C.accent:C.card, color: period===val?"#fff":C.muted, border: `1px solid ${period===val?C.accent:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? <Spinner /> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+
+          {/* Work Orders Section */}
+          <div>
+            <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>🔧 Work Orders</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 16 }}>
+              <KpiCard icon="📋" label="Total Work Orders" value={totalWOs} sub={`${overdueWOs} overdue`} color={C.accent} percent={completionRate} />
+              <KpiCard icon="✅" label="Completed" value={completedWOs} sub="work orders done" color={C.green} />
+              <KpiCard icon="⚠️" label="Overdue" value={overdueWOs} sub="past due date" color={C.red} />
+              <KpiCard icon="⏳" label="In Progress" value={workOrders.filter(w => w.status==="In Progress").length} sub="being worked on" color={C.blue} />
+            </div>
+            <BarChart title="Work Orders by Status" data={woByStatus} labelKey="label" valueKey="count" colorKey="color" />
+          </div>
+
+          {/* Asset Section */}
+          <div>
+            <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>🏭 Asset Performance</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 16 }}>
+              <KpiCard icon="✅" label="Asset Uptime Rate" value={`${operationalAssets}/${totalAssets}`} sub="operational assets" color={C.green} percent={uptimeRate} />
+              <KpiCard icon="🚨" label="Currently Down" value={downtimeAssets} sub="under maintenance" color={C.red} />
+              <KpiCard icon="⚠️" label="Degraded" value={degradedAssets} sub="needs attention" color={C.yellow} />
+              <KpiCard icon="⏱" label="Total Downtime" value={formatDowntime(totalDowntimeMins)} sub="this period" color={C.purple} />
+            </div>
+            <BarChart title="Assets by Site" data={siteData.map(s => ({ label: s.site, count: s.total, color: s.down > 0 ? C.accent : C.green }))} labelKey="label" valueKey="count" colorKey="color" />
+          </div>
+
+          {/* PM Section */}
+          <div>
+            <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>📋 Preventive Maintenance</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+              <KpiCard icon="📊" label="PM Compliance" value={`${totalAssets - pmDue}/${totalAssets}`} sub="assets up to date" color={C.green} percent={pmCompliance} />
+              <KpiCard icon="⚠️" label="PM Overdue" value={pmDue} sub="assets need PM" color={C.red} />
+              <KpiCard icon="🔧" label="PM Logs This Period" value={pmLogs} sub="preventive maintenance done" color={C.blue} />
+              <KpiCard icon="🔨" label="Corrective Repairs" value={correctiveLogs} sub="repairs this period" color={C.accent} />
+            </div>
+          </div>
+
+          {/* Breakdown Section */}
+          <div>
+            <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>🚨 Breakdown Analysis</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 16 }}>
+              <KpiCard icon="🚨" label="Total Breakdowns" value={totalBreakdowns} sub="this period" color={C.red} />
+              <KpiCard icon="✅" label="Resolved" value={resolvedBreakdowns} sub="breakdowns fixed" color={C.green} percent={totalBreakdowns > 0 ? Math.round((resolvedBreakdowns/totalBreakdowns)*100) : 0} />
+              <KpiCard icon="⏱" label="Avg Downtime" value={formatDowntime(avgDowntime)} sub="per breakdown" color={C.yellow} />
+              <KpiCard icon="🔓" label="Open Breakdowns" value={totalBreakdowns - resolvedBreakdowns} sub="still pending" color={C.accent} />
+            </div>
+            {breakdowns.length > 0 && (
+              <BarChart
+                title="Breakdowns by Site"
+                data={SITES.filter(s => s !== "— Select Site —").map(site => ({
+                  label: site,
+                  count: breakdowns.filter(b => b.site === site).length,
+                  color: C.red,
+                })).filter(s => s.count > 0)}
+                labelKey="label" valueKey="count" colorKey="color"
+              />
+            )}
+          </div>
+
+          {/* Vendor Section */}
+          <div>
+            <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>🤝 Vendor Performance</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 16 }}>
+              <KpiCard icon="🤝" label="Active Vendors" value={activeVendors} sub="contractors available" color={C.blue} />
+              <KpiCard icon="🔓" label="Open Orders" value={vendors.reduce((s, v) => s + (v.open_orders || 0), 0)} sub="across all vendors" color={C.accent} />
+            </div>
+            {vendorWOs.length > 0 && (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>Vendor Work Order Summary</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {["Vendor", "Open", "Completed", "Total", "Rating"].map(h => (
+                        <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {vendorWOs.map((v, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                          <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{v.name}</td>
+                          <td style={{ padding: "10px 12px" }}><Badge label={String(v.open)} color={v.open > 0 ? C.accent : C.muted} /></td>
+                          <td style={{ padding: "10px 12px" }}><Badge label={String(v.completed)} color={C.green} /></td>
+                          <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 700 }}>{v.open + v.completed}</td>
+                          <td style={{ padding: "10px 12px", fontSize: 13, color: C.yellow, fontWeight: 700 }}>{v.rating > 0 ? `★ ${Number(v.rating).toFixed(1)}` : "N/A"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+
+        </div>
+      )}
+    </div>
+  );
+}
 function UserManagement() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1591,7 +1824,7 @@ export default function App() {
   const tabs = [
     "Overview",
     "Breakdowns",
-    ...(userRole.role !== "operations" ? ["Work Orders", "Assets", "Vendors", "PM Planner"] : []),
+    ...(userRole.role !== "operations" ? ["Work Orders", "Assets", "Vendors", "PM Planner", "Reports"] : []),
     ...(isAdmin ? ["Users"] : []),
   ];
 
@@ -1625,6 +1858,7 @@ export default function App() {
         {tab==="Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} />}
         {tab==="Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} />}
         {tab==="PM Planner" && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} />}
+        {tab==="Reports" && <Reports workOrders={workOrders} assets={assets} vendors={vendors} breakdowns={[]} />}
         {tab==="Users" && isAdmin && <UserManagement />}
       </div>
     </div>
