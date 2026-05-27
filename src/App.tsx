@@ -988,7 +988,7 @@ function WorkOrderPhotosModal({ workOrder, onClose }) {
     </div>
   );
 }
-function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors }) {
+function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors, assets }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [filter, setFilter] = useState("All");
   const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null); const [selectedWO, setSelectedWO] = useState(null);
@@ -1027,6 +1027,24 @@ if (err) { setError(err.message); } else {
     const { data: vendorData } = await supabase.from("vendors").select("id, open_orders").eq("name", wo.vendor).single();
     if (vendorData) await supabase.from("vendors").update({ open_orders: (vendorData.open_orders || 0) + 1 }).eq("id", vendorData.id);
   }
+  // Auto-create maintenance log when work order is completed
+  if (val === "Completed" && wo?.status !== "Completed" && wo?.asset) {
+    const { data: assetData } = await supabase.from("assets").select("id").eq("name", wo.asset).single();
+    if (assetData) {
+      await supabase.from("maintenance_logs").insert([{
+        id: uid("LOG"), asset_id: assetData.id, asset_name: wo.asset,
+        log_type: wo.title.startsWith("PM -") ? "Preventive Maintenance" : "Corrective Repair",
+        title: wo.title,
+        description: `Work order completed.\nVendor: ${wo.vendor || "—"}\nPriority: ${wo.priority}`,
+        performed_by: wo.assignee || "—",
+        vendor: wo.vendor || null,
+        start_date: wo.start_date || TODAY,
+        end_date: TODAY,
+        cost: null, status: "Completed",
+        downtime_start: null, downtime_end: null, downtime_hours: null,
+      }]);
+    }
+  }
 };
   const updatePriority = async (id,val) => { await supabase.from("work_orders").update({ priority: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,priority:val}:wo)); };
   const saveEdit = async (updated) => { const { error: err } = await supabase.from("work_orders").update(updated).eq("id",updated.id); if (!err) { setWorkOrders(prev => prev.map(wo => wo.id===updated.id?updated:wo)); setEditItem(null); } else setError(err.message); };
@@ -1047,7 +1065,14 @@ if (err) { setError(err.message); } else {
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>New Work Order</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            <Input label="Title *" value={form.title} onChange={f("title")} /><Input label="Asset *" value={form.asset} onChange={f("asset")} />
+            <Input label="Title *" value={form.title} onChange={f("title")} /><div>
+  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Asset *</div>
+  <select value={form.asset} onChange={e => f("asset")(e.target.value)}
+    style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
+    <option value="">— Select Asset —</option>
+    {assets.map(a => <option key={a.id} value={a.name}>{a.name} ({a.location})</option>)}
+  </select>
+</div>
             <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" /><Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
             <Sel label="Priority" value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} /><Sel label="Vendor" value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
           </div>
