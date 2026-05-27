@@ -1070,7 +1070,7 @@ if (err) { setError(err.message); } else {
   <select value={form.asset} onChange={e => f("asset")(e.target.value)}
     style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
     <option value="">— Select Asset —</option>
-    {assets.map(a => <option key={a.id} value={a.name}>{a.name} ({a.location})</option>)}
+    {(assets||[]).map(a => <option key={a.id} value={a.name}>{a.name} ({a.location})</option>)}
   </select>
 </div>
             <Input label="Start Date" value={form.start_date} onChange={f("start_date")} type="date" /><Input label="Due Date" value={form.due} onChange={f("due")} type="date" />
