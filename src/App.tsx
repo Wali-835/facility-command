@@ -1,6 +1,8 @@
 // v2 - vendor work orders
 import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { supabase } from "./supabase";
 
 const C = {
@@ -1503,8 +1505,6 @@ function Reports({ workOrders, assets, vendors }) {
   };
 
   const exportToPDF = async () => {
-    const { default: jsPDF } = await import("jspdf");
-    const { default: autoTable } = await import("jspdf-autotable");
     const doc = new jsPDF();
     const totalWOs = workOrders.length;
     const completedWOs = workOrders.filter(w => w.status === "Completed").length;
