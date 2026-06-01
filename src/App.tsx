@@ -1445,6 +1445,191 @@ function Overview({ workOrders, assets, vendors, breakdownCount }) {
 }
 
 // ─── USER MANAGEMENT (Admin only) ────────────────────────────────────────────
+function MaintenanceCalendar({ workOrders, assets }) {
+  const now = new Date();
+  const [currentMonth, setCurrentMonth] = useState(now.getMonth());
+  const [currentYear, setCurrentYear] = useState(now.getFullYear());
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [filter, setFilter] = useState("All");
+
+  const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  const prevMonth = () => {
+    if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear(y => y - 1); }
+    else setCurrentMonth(m => m - 1);
+    setSelectedDay(null);
+  };
+
+  const nextMonth = () => {
+    if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear(y => y + 1); }
+    else setCurrentMonth(m => m + 1);
+    setSelectedDay(null);
+  };
+
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getDay();
+
+  const getEventsForDay = (day) => {
+    const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const events = [];
+
+    // Work orders due on this day
+    workOrders.forEach(wo => {
+      if (wo.due === dateStr && (filter === "All" || filter === "Work Orders")) {
+        events.push({ type: "work_order", title: wo.title, asset: wo.asset, status: wo.status, priority: wo.priority, color: wo.status === "Completed" ? C.green : wo.due <= TODAY && wo.status !== "Completed" ? C.red : priorityColor(wo.priority) });
+      }
+      if (wo.start_date === dateStr && (filter === "All" || filter === "Work Orders")) {
+        events.push({ type: "work_order_start", title: `▶ ${wo.title}`, asset: wo.asset, status: wo.status, color: C.blue });
+      }
+    });
+
+    // PM due on this day
+    assets.forEach(a => {
+      if (a.next_service === dateStr && (filter === "All" || filter === "PM")) {
+        events.push({ type: "pm", title: `PM: ${a.name}`, asset: a.name, color: C.yellow });
+      }
+    });
+
+    return events;
+  };
+
+  const selectedEvents = selectedDay ? getEventsForDay(selectedDay) : [];
+  const selectedDateStr = selectedDay ? `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(selectedDay).padStart(2, "0")}` : null;
+
+  // Count events per day for dot indicators
+  const eventCounts = {};
+  for (let d = 1; d <= daysInMonth; d++) {
+    eventCounts[d] = getEventsForDay(d).length;
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>🗓 Maintenance Calendar</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["All", "Work Orders", "PM"].map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{ background: filter===f?C.accent:C.card, color: filter===f?"#fff":C.muted, border: `1px solid ${filter===f?C.accent:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{f}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20, alignItems: "start" }}>
+        {/* Calendar */}
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+          {/* Month Navigation */}
+          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button onClick={prevMonth} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, cursor: "pointer", padding: "6px 14px", fontSize: 16 }}>‹</button>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{monthNames[currentMonth]} {currentYear}</div>
+            <button onClick={nextMonth} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, cursor: "pointer", padding: "6px 14px", fontSize: 16 }}>›</button>
+          </div>
+
+          {/* Day Names */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: `1px solid ${C.border}` }}>
+            {dayNames.map(d => (
+              <div key={d} style={{ padding: "10px 0", textAlign: "center", fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{d}</div>
+            ))}
+          </div>
+
+          {/* Days Grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+            {/* Empty cells for first day offset */}
+            {Array.from({ length: firstDayOfMonth }).map((_, i) => (
+              <div key={`empty-${i}`} style={{ padding: "10px 0", minHeight: 60, borderRight: `1px solid ${C.border}22`, borderBottom: `1px solid ${C.border}22` }} />
+            ))}
+            {/* Day cells */}
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1;
+              const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+              const isToday = dateStr === TODAY;
+              const isSelected = selectedDay === day;
+              const count = eventCounts[day];
+              const events = getEventsForDay(day);
+              const hasOverdue = events.some(e => e.color === C.red);
+              const hasPM = events.some(e => e.type === "pm");
+
+              return (
+                <div key={day} onClick={() => setSelectedDay(day === selectedDay ? null : day)} style={{
+                  padding: "8px 6px", minHeight: 60, borderRight: `1px solid ${C.border}22`,
+                  borderBottom: `1px solid ${C.border}22`, cursor: count > 0 ? "pointer" : "default",
+                  background: isSelected ? C.accent+"22" : isToday ? C.blue+"11" : "transparent",
+                  transition: "background 0.15s",
+                }}>
+                  <div style={{
+                    width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                    background: isToday ? C.blue : isSelected ? C.accent : "transparent",
+                    color: isToday || isSelected ? "#fff" : C.text,
+                    fontSize: 13, fontWeight: isToday ? 700 : 400, margin: "0 auto 4px",
+                  }}>{day}</div>
+                  {count > 0 && (
+                    <div style={{ display: "flex", justifyContent: "center", gap: 3, flexWrap: "wrap" }}>
+                      {hasOverdue && <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.red }} />}
+                      {hasPM && <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.yellow }} />}
+                      {!hasOverdue && !hasPM && count > 0 && <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent }} />}
+                      {count > 2 && <div style={{ fontSize: 9, color: C.muted }}>+{count-1}</div>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Legend */}
+          <div style={{ padding: "12px 20px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 16, flexWrap: "wrap" }}>
+            {[["🔴", "Overdue"], ["🟡", "PM Due"], ["🟠", "Work Order"], ["🔵", "Today"]].map(([dot, label]) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted }}>
+                <span>{dot}</span> {label}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Day Detail Panel */}
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, position: "sticky", top: 20 }}>
+          {selectedDay ? (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                {monthNames[currentMonth]} {selectedDay}, {currentYear}
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{selectedEvents.length} event(s)</div>
+              {selectedEvents.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 24, color: C.muted, fontSize: 13 }}>No events this day.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {selectedEvents.map((ev, i) => (
+                    <div key={i} style={{ background: ev.color+"11", border: `1px solid ${ev.color}44`, borderRadius: 8, padding: 12, borderLeft: `3px solid ${ev.color}` }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>{ev.title}</div>
+                      {ev.asset && <div style={{ fontSize: 11, color: C.muted }}>📍 {ev.asset}</div>}
+                      {ev.status && <div style={{ marginTop: 6 }}><Badge label={ev.status} color={statusColor(ev.status)} /></div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ textAlign: "center", padding: 24 }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>🗓</div>
+              <div style={{ fontSize: 13, color: C.muted }}>Click on a day to see scheduled maintenance and work orders.</div>
+              <div style={{ marginTop: 20 }}>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, textTransform: "uppercase", fontWeight: 600 }}>This Month</div>
+                {[
+                  ["Work Orders Due", workOrders.filter(w => { const d = new Date(w.due||""); return d.getMonth()===currentMonth && d.getFullYear()===currentYear; }).length, C.accent],
+                  ["PM Scheduled", assets.filter(a => { const d = new Date(a.next_service||""); return d.getMonth()===currentMonth && d.getFullYear()===currentYear; }).length, C.yellow],
+                  ["Overdue", workOrders.filter(w => w.due && w.due <= TODAY && w.status !== "Completed").length, C.red],
+                ].map(([label, count, color]) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}22` }}>
+                    <span style={{ fontSize: 13, color: C.subtle }}>{label}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color }}>{count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 function Reports({ workOrders, assets, vendors }) {
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -1984,7 +2169,7 @@ export default function App() {
   const tabs = [
     "Overview",
     "Breakdowns",
-    ...(userRole.role !== "operations" ? ["Work Orders", "Assets", "Vendors", "PM Planner", "Reports"] : []),
+    ...(userRole.role !== "operations" ? ["Work Orders", "Assets", "Vendors", "PM Planner", "Reports", "Calendar"] : []),
     ...(isAdmin ? ["Users"] : []),
   ];
 
@@ -2019,6 +2204,7 @@ export default function App() {
         {tab==="Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} />}
         {tab==="PM Planner" && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} />}
         {tab==="Reports" && <Reports workOrders={workOrders} assets={assets} vendors={vendors} breakdowns={[]} />}
+        {tab==="Calendar" && <MaintenanceCalendar workOrders={workOrders} assets={assets} />}
         {tab==="Users" && isAdmin && <UserManagement />}
       </div>
     </div>
