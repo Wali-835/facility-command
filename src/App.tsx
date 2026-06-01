@@ -333,16 +333,24 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const resolvedCount = breakdowns.filter(b => b.status === "Resolved").length;
   const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0);
 
-  const onReported = (record) => {
+  const onReported = async (record) => {
     setBreakdowns(prev => [record, ...prev]);
     setAssets(prev => prev.map(a => a.id === record.asset_id ? { ...a, status: "Under Maintenance" } : a));
-    setSuccess("Breakdown reported! Maintenance team has been notified.");
+    // Send email notification
+    const { data: funcs } = await supabase.functions.invoke("notify-breakdown", {
+      body: { breakdown: record, type: "reported" },
+    });
+    setSuccess("Breakdown reported! Maintenance team has been notified by email.");
   };
 
-  const onResolved = (updated) => {
+  const onResolved = async (updated) => {
     setBreakdowns(prev => prev.map(b => b.id === updated.id ? updated : b));
     setAssets(prev => prev.map(a => a.id === updated.asset_id ? { ...a, status: "Operational" } : a));
-    setSuccess("Breakdown resolved! Equipment is back to operation. Maintenance log created automatically.");
+    // Send email notification
+    await supabase.functions.invoke("notify-breakdown", {
+      body: { breakdown: updated, type: "resolved" },
+    });
+    setSuccess("Breakdown resolved! Equipment is back to operation. Email notification sent.");
   };
 
   const acknowledge = async (b) => {
