@@ -336,20 +336,72 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const onReported = async (record) => {
     setBreakdowns(prev => [record, ...prev]);
     setAssets(prev => prev.map(a => a.id === record.asset_id ? { ...a, status: "Under Maintenance" } : a));
-    // Send email notification
-    const { data: funcs } = await supabase.functions.invoke("notify-breakdown", {
-      body: { breakdown: record, type: "reported" },
-    });
+    // Send email via Resend directly
+    try {
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_RESEND_API_KEY}`,
+        },
+        body: JSON.stringify({
+          from: "Facility Command <onboarding@resend.dev>",
+          to: "awali@epxlogistics.com",
+          subject: `🚨 New Breakdown — ${record.asset_name} (${record.severity})`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px;">
+              <div style="background: #ef4444; padding: 20px; border-radius: 8px 8px 0 0;">
+                <h2 style="color: white; margin: 0;">🚨 New Breakdown Reported</h2>
+              </div>
+              <div style="background: #f9fafb; padding: 20px; border-radius: 0 0 8px 8px;">
+                <p><strong>Equipment:</strong> ${record.asset_name}</p>
+                <p><strong>Site:</strong> ${record.site}</p>
+                <p><strong>Reported by:</strong> ${record.reported_by}</p>
+                <p><strong>Severity:</strong> ${record.severity}</p>
+                <p><strong>Issue:</strong> ${record.description}</p>
+                <p><strong>Time:</strong> ${new Date(record.reported_at).toLocaleString("en-GB")}</p>
+                <a href="https://wali-835.github.io/facility-command/" style="background: #ef4444; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 10px;">View in App</a>
+              </div>
+            </div>
+          `,
+        }),
+      });
+    } catch (e) { console.error("Email error:", e); }
     setSuccess("Breakdown reported! Maintenance team has been notified by email.");
   };
 
   const onResolved = async (updated) => {
     setBreakdowns(prev => prev.map(b => b.id === updated.id ? updated : b));
     setAssets(prev => prev.map(a => a.id === updated.asset_id ? { ...a, status: "Operational" } : a));
-    // Send email notification
-    await supabase.functions.invoke("notify-breakdown", {
-      body: { breakdown: updated, type: "resolved" },
-    });
+    try {
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_RESEND_API_KEY}`,
+        },
+        body: JSON.stringify({
+          from: "Facility Command <onboarding@resend.dev>",
+          to: "awali@epxlogistics.com",
+          subject: `✅ Breakdown Resolved — ${updated.asset_name}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px;">
+              <div style="background: #22c55e; padding: 20px; border-radius: 8px 8px 0 0;">
+                <h2 style="color: white; margin: 0;">✅ Breakdown Resolved</h2>
+              </div>
+              <div style="background: #f9fafb; padding: 20px; border-radius: 0 0 8px 8px;">
+                <p><strong>Equipment:</strong> ${updated.asset_name}</p>
+                <p><strong>Site:</strong> ${updated.site}</p>
+                <p><strong>Resolved by:</strong> ${updated.resolved_by}</p>
+                <p><strong>Downtime:</strong> ${formatDowntime(Math.round((updated.downtime_hours||0)))}</p>
+                <p><strong>Notes:</strong> ${updated.maintenance_notes||"—"}</p>
+                <a href="https://wali-835.github.io/facility-command/" style="background: #22c55e; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 10px;">View in App</a>
+              </div>
+            </div>
+          `,
+        }),
+      });
+    } catch (e) { console.error("Email error:", e); }
     setSuccess("Breakdown resolved! Equipment is back to operation. Email notification sent.");
   };
 
