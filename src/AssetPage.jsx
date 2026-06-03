@@ -55,6 +55,175 @@ const Banner = ({ msg, color, onDismiss }) => msg ? (
   </div>
 ) : null;
 
+function ChecklistView({ asset, userRole, onDone, onBack }) {
+  const [items, setItems] = useState([]);
+  const [responses, setResponses] = useState({});
+  const [executionId, setExecutionId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [executedBy, setExecutedBy] = useState(userRole?.name || "");
+  const [error, setError] = useState(null);
+  const [filterFreq, setFilterFreq] = useState("All");
+  const TODAY = new Date().toISOString().split("T")[0];
+  const uid = (p) => `${p}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2,5).toUpperCase()}`;
+  const FREQ_COLORS = { D: "#22c55e", W: "#3b82f6", F: "#a855f7", M: "#f97316" };
+  const FREQ_LABELS = { D: "Daily", W: "Weekly", F: "Bi-weekly", M: "Monthly" };
+
+  useEffect(() => { loadChecklist(); }, []);
+
+  const loadChecklist = async () => {
+    setLoading(true);
+    const { data: checklists } = await supabase.from("checklists").select("id").limit(1);
+    if (!checklists?.length) { setLoading(false); return; }
+    const { data: checkItems } = await supabase.from("checklist_items").select("*").eq("checklist_id", checklists[0].id).order("item_number");
+    setItems(checkItems || []);
+    const now = new Date();
+    const { data: existing } = await supabase.from("checklist_executions").select("*").eq("asset_id", asset.id).eq("month", now.getMonth()+1).eq("year", now.getFullYear()).limit(1);
+    if (existing?.length) {
+      setExecutionId(existing[0].id);
+      setExecutedBy(existing[0].executed_by || userRole?.name || "");
+      const { data: resps } = await supabase.from("checklist_responses").select("*").eq("execution_id", existing[0].id);
+      const respMap = {};
+      resps?.forEach(r => { respMap[r.item_id] = r; });
+      setResponses(respMap);
+    }
+    setLoading(false);
+  };
+
+  const startExecution = async () => {
+    if (!executedBy) { setError("Please enter your name."); return; }
+    const now = new Date();
+    const execId = uid("EXC");
+    const { data: checklists } = await supabase.from("checklists").select("id").limit(1);
+    await supabase.from("checklist_executions").insert([{
+      id: execId, checklist_id: checklists[0].id, asset_id: asset.id, asset_name: asset.name,
+      executed_by: executedBy, execution_date: TODAY, month: now.getMonth()+1, year: now.getFullYear(), status: "In Progress",
+    }]);
+    setExecutionId(execId);
+  };
+
+  const setResponse = async (itemId, result, notes="") => {
+    if (!executionId) return;
+    const existing = responses[itemId];
+    if (existing) {
+      await supabase.from("checklist_responses").update({ result, notes }).eq("id", existing.id);
+      setResponses(prev => ({ ...prev, [itemId]: { ...existing, result, notes } }));
+    } else {
+      const record = { id: uid("RSP"), execution_id: executionId, item_id: itemId, result, notes };
+      await supabase.from("checklist_responses").insert([record]);
+      setResponses(prev => ({ ...prev, [itemId]: record }));
+    }
+  };
+
+  const complete = async () => {
+    if (!executionId) return;
+    setSaving(true);
+    await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
+    const passCount = Object.values(responses).filter(r => r.result==="PASS").length;
+    const failCount = Object.values(responses).filter(r => r.result==="FAIL").length;
+    const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
+    const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
+    const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects:\n${defects}` : "\nNo defects found."}`;
+    await supabase.from("maintenance_logs").insert([{
+      id: uid("LOG"), asset_id: asset.id, asset_name: asset.name,
+      log_type: "Preventive Maintenance",
+      title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`,
+      description, performed_by: executedBy, vendor: null,
+      start_date: TODAY, end_date: TODAY, cost: null,
+      status: failCount > 0 ? "In Progress" : "Completed",
+    }]);
+    const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", asset.name).in("status", ["Open","In Progress","Pending"]).ilike("title","PM - %");
+    if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
+    onDone();
+    setSaving(false);
+  };
+
+  const filteredItems = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
+  const answeredCount = filteredItems.filter(i => responses[i.id]).length;
+  const failCount = filteredItems.filter(i => responses[i.id]?.result==="FAIL").length;
+
+  return (
+    <div style={{ background: "#1a1e2a", border: "1px solid #252b3b", borderRadius: 12, padding: 20 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#22c55e", marginBottom: 16 }}>📋 CIL Checklist</div>
+
+      {/* Progress */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#64748b", marginBottom: 6 }}>
+          <span>Progress: {answeredCount}/{filteredItems.length}</span>
+          <span style={{ color: failCount > 0 ? "#ef4444" : "#22c55e" }}>{failCount} FAIL</span>
+        </div>
+        <div style={{ background: "#252b3b", borderRadius: 4, height: 8 }}>
+          <div style={{ background: failCount > 0 ? "#f97316" : "#22c55e", width: `${filteredItems.length > 0 ? (answeredCount/filteredItems.length)*100 : 0}%`, height: 8, borderRadius: 4 }} />
+        </div>
+      </div>
+
+      {/* Frequency Filter */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {["All","D","W","F","M"].map(f => (
+          <button key={f} onClick={() => setFilterFreq(f)} style={{ background: filterFreq===f?(FREQ_COLORS[f]||"#f97316"):"#141720", color: filterFreq===f?"#fff":"#64748b", border: `1px solid ${filterFreq===f?(FREQ_COLORS[f]||"#f97316"):"#252b3b"}`, borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            {f==="All"?"All":FREQ_LABELS[f]}
+          </button>
+        ))}
+      </div>
+
+      {/* Start form */}
+      {!executionId && (
+        <div style={{ background: "#141720", border: "1px solid #f9731644", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8, textTransform: "uppercase" }}>Start Checklist</div>
+          <input value={executedBy} onChange={e => setExecutedBy(e.target.value)} placeholder="Your name *"
+            style={{ width: "100%", background: "#1a1e2a", border: "1px solid #252b3b", borderRadius: 6, padding: "10px", color: "#e2e8f0", fontSize: 14, boxSizing: "border-box", marginBottom: 10 }} />
+          {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{error}</div>}
+          <button onClick={startExecution} style={{ background: "#f97316", color: "#fff", border: "none", borderRadius: 8, padding: "12px", width: "100%", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Start</button>
+        </div>
+      )}
+
+      {loading ? <div style={{ textAlign: "center", color: "#64748b", padding: 20 }}>Loading...</div> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "50vh", overflowY: "auto" }}>
+          {filteredItems.map(item => {
+            const resp = responses[item.id];
+            const result = resp?.result;
+            return (
+              <div key={item.id} style={{ background: result==="PASS"?"#22c55e11":result==="FAIL"?"#ef444411":"#141720", border: `1px solid ${result==="PASS"?"#22c55e44":result==="FAIL"?"#ef444444":"#252b3b"}`, borderRadius: 8, padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, color: "#64748b", fontFamily: "monospace" }}>#{item.item_number}</span>
+                      <span style={{ background: (FREQ_COLORS[item.frequency]||"#f97316")+"22", color: FREQ_COLORS[item.frequency]||"#f97316", border: `1px solid ${(FREQ_COLORS[item.frequency]||"#f97316")}44`, borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{item.frequency_label}</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>{item.item_en}</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 2, direction: "rtl" }}>{item.item_ar}</div>
+                  </div>
+                  {executionId && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <button onClick={() => setResponse(item.id,"PASS")} style={{ background: result==="PASS"?"#22c55e":"transparent", color: result==="PASS"?"#fff":"#22c55e", border: "2px solid #22c55e", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ PASS</button>
+                      <button onClick={() => setResponse(item.id,"FAIL")} style={{ background: result==="FAIL"?"#ef4444":"transparent", color: result==="FAIL"?"#fff":"#ef4444", border: "2px solid #ef4444", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✗ FAIL</button>
+                      <button onClick={() => setResponse(item.id,"N/A")} style={{ background: result==="N/A"?"#64748b":"transparent", color: result==="N/A"?"#fff":"#64748b", border: "2px solid #64748b44", borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>N/A</button>
+                    </div>
+                  )}
+                </div>
+                {result==="FAIL" && executionId && (
+                  <textarea placeholder="Describe the issue..." value={resp?.notes||""} onChange={e => setResponse(item.id,"FAIL",e.target.value)} rows={2}
+                    style={{ width: "100%", background: "#1a1e2a", border: "1px solid #ef444444", borderRadius: 6, padding: "8px", color: "#e2e8f0", fontSize: 12, boxSizing: "border-box", resize: "vertical", marginTop: 8 }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {executionId && (
+        <div style={{ marginTop: 16 }}>
+          <button onClick={complete} disabled={saving} style={{ background: "#22c55e", color: "#fff", border: "none", borderRadius: 10, padding: "14px", width: "100%", fontSize: 15, fontWeight: 700, cursor: saving?"not-allowed":"pointer", opacity: saving?0.6:1, marginBottom: 10 }}>
+            {saving ? "Completing..." : "✓ Complete Checklist"}
+          </button>
+          <button onClick={onBack} style={{ background: "transparent", color: "#64748b", border: "1px solid #252b3b", borderRadius: 10, padding: "14px", width: "100%", fontSize: 15, fontWeight: 700, cursor: "pointer" }}>Back</button>
+        </div>
+      )}
+      {!executionId && <button onClick={onBack} style={{ background: "transparent", color: "#64748b", border: "1px solid #252b3b", borderRadius: 10, padding: "14px", width: "100%", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 10 }}>Back</button>}
+    </div>
+  );
+}
+
 export default function AssetPage() {
   const [asset, setAsset] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -287,8 +456,9 @@ export default function AssetPage() {
             {(userRole.role === "maintenance" || userRole.role === "admin") && (
               <>
                 <Btn onClick={() => { setView("log"); loadLogs(); }} color={C.blue}>🔧 Add Maintenance Log</Btn>
+                <Btn onClick={() => setView("checklist")} color={C.green}>📋 Run PM Checklist</Btn>
                 <Btn onClick={() => setView("workorder")} color={C.accent}>📋 Open Work Order</Btn>
-                <Btn onClick={() => { setView("parts"); loadLogs(); }} color={C.purple || "#a855f7"}>🔩 Add Spare Parts</Btn>
+                <Btn onClick={() => { setView("parts"); loadLogs(); }} color="#a855f7">🔩 Add Spare Parts</Btn>
               </>
             )}
           </div>
@@ -363,7 +533,9 @@ export default function AssetPage() {
             <Btn onClick={() => setView("home")} secondary>Cancel</Btn>
           </div>
         </div>
-      ) : null}
+      ) : view === "checklist" ? (
+        <ChecklistView asset={asset} userRole={userRole} onDone={() => { setView("home"); setSuccess("Checklist completed! Log added to maintenance history."); }} onBack={() => setView("home")} />
+) : null}
 
       {/* Footer */}
       <div style={{ textAlign: "center", marginTop: 24, fontSize: 11, color: C.muted }}>
