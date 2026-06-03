@@ -1,6 +1,7 @@
 // v2 - vendor work orders
 import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
+import QRCode from "qrcode";
 import jsPDF from "jspdf";
 import { applyPlugin } from "jspdf-autotable";
 import { supabase } from "./supabase";
@@ -1152,6 +1153,31 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
     if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" }); setShowForm(false); }
     setSaving(false);
   };
+  const generateQR = async (asset) => {
+    const url = `https://wali-835.github.io/facility-command/?asset=${asset.id}`;
+    const canvas = document.createElement("canvas");
+    await QRCode.toCanvas(canvas, url, { width: 300, margin: 2, color: { dark: "#000000", light: "#ffffff" } });
+
+    // Create printable page
+    const win = window.open("", "_blank");
+    win.document.write(`
+      <html>
+        <head><title>QR Code - ${asset.name}</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 40px; background: white;">
+          <div style="border: 2px solid #f97316; border-radius: 12px; padding: 30px; max-width: 400px; margin: 0 auto;">
+            <div style="font-size: 14px; color: #666; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 2px;">EPx Logistics — Facility Command</div>
+            <div style="font-size: 22px; font-weight: bold; color: #0d0f12; margin-bottom: 4px;">${asset.name}</div>
+            <div style="font-size: 14px; color: #666; margin-bottom: 20px;">${asset.category} · ${asset.location}</div>
+            <img src="${canvas.toDataURL()}" style="width: 250px; height: 250px;" />
+            <div style="font-size: 12px; color: #999; margin-top: 16px;">Scan to report breakdown or log maintenance</div>
+            <div style="font-size: 10px; color: #ccc; margin-top: 8px;">${asset.id}</div>
+          </div>
+          <button onclick="window.print()" style="margin-top: 20px; background: #f97316; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer;">🖨️ Print QR Code</button>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  };
   const updateStatus = async (id,val) => { await supabase.from("assets").update({ status: val }).eq("id",id); setAssets(prev => prev.map(a => a.id===id?{...a,status:val}:a)); };
   const saveEdit = async (updated) => { const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id); if (!err) { setAssets(prev => prev.map(a => a.id===updated.id?updated:a)); setEditItem(null); } else setError(err.message); };
   const confirmDelete = async () => { await supabase.from("assets").delete().eq("id",deleteItem.id); setAssets(prev => prev.filter(a => a.id!==deleteItem.id)); setDeleteItem(null); };
@@ -1201,6 +1227,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors }) {
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📋 Log & Checklist</button>
+<button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📲 QR</button>
                   {isAdmin && <><Btn small onClick={() => setEditItem(a)} color={C.accent}>Edit</Btn><Btn small variant="danger" onClick={() => setDeleteItem(a)}>Del</Btn></>}
                 </div>
               </div>
