@@ -1,5 +1,6 @@
 // v2 - vendor work orders
 import { useState, useEffect, useCallback } from "react";
+import { t } from "./i18n.js";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import jsPDF from "jspdf";
@@ -2171,7 +2172,8 @@ function UserManagement() {
 
 export default function App() {
   const [session, setSession] = useState(null); const [authLoading, setAuthLoading] = useState(true);
-  const [userRole, setUserRole] = useState({ role: "operations", name: "", site: "" });
+  const [userRole, setUserRole] = useState({ role: "operations", name: "", site: "", language: "en" });
+const [lang, setLang] = useState("en");
   const [tab, setTab] = useState("Overview");
   const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
@@ -2186,11 +2188,21 @@ export default function App() {
   useEffect(() => {
     if (session) {
       supabase.from("user_roles").select("*").eq("email", session.user.email).single().then(({ data }) => {
-        if (data) setUserRole(data);
-        else setUserRole({ role: session.user.email === ADMIN_EMAIL ? "admin" : "operations", name: session.user.email, site: "" });
+        if (data) { setUserRole(data); setLang(data.language || "en"); }
+        else setUserRole({ role: session.user.email === ADMIN_EMAIL ? "admin" : "operations", name: session.user.email, site: "", language: "en" });
       });
     }
   }, [session]);
+
+  const toggleLanguage = async () => {
+    const newLang = lang === "en" ? "ar" : "en";
+    setLang(newLang);
+    document.dir = newLang === "ar" ? "rtl" : "ltr";
+    if (session) {
+      await supabase.from("user_roles").update({ language: newLang }).eq("email", session.user.email);
+      setUserRole(prev => ({ ...prev, language: newLang }));
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading({ workOrders: true, assets: true, vendors: true });
@@ -2215,10 +2227,10 @@ export default function App() {
 
   // Tabs based on role
   const tabs = [
-    "Overview",
-    "Breakdowns",
-    ...(userRole.role !== "operations" ? ["Work Orders", "Assets", "Vendors", "PM Planner", "Reports", "Calendar"] : []),
-    ...(isAdmin ? ["Users"] : []),
+    t(lang, "overview"),
+    t(lang, "breakdowns"),
+    ...(userRole.role !== "operations" ? [t(lang, "workOrders"), t(lang, "assets"), t(lang, "vendors"), t(lang, "pmPlanner"), t(lang, "reports"), t(lang, "calendar")] : []),
+    ...(isAdmin ? [t(lang, "users")] : []),
   ];
 
   return (
@@ -2233,10 +2245,13 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={load} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Refresh</button>
-            <span style={{ background: roleColor+"22", color: roleColor, border: `1px solid ${roleColor}44`, borderRadius: 4, padding: "3px 8px", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon} {userRole.role}</span>
+            <button onClick={load} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>{t(lang, "refresh")}</button>
+            <button onClick={toggleLanguage} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.text, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+  {lang === "en" ? "🇸🇦 العربية" : "🇬🇧 English"}
+</button>
+<span style={{ background: roleColor+"22", color: roleColor, border: `1px solid ${roleColor}44`, borderRadius: 4, padding: "3px 8px", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon} {userRole.role}</span>
             <div style={{ fontSize: 11, color: C.muted, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userRole.name || session.user.email}</div>
-            <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>Sign Out</button>
+            <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>{t(lang, "signOut")}</button>
           </div>
         </div>
         <div style={{ display: "flex", overflowX: "auto" }}>
@@ -2245,15 +2260,15 @@ export default function App() {
       </div>
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
-        {tab==="Overview" && <Overview workOrders={workOrders} assets={assets} vendors={vendors} />}
-        {tab==="Breakdowns" && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} />}
-        {tab==="Work Orders" && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} assets={assets} />}
-        {tab==="Assets" && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} />}
-        {tab==="Vendors" && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} />}
-        {tab==="PM Planner" && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} />}
-        {tab==="Reports" && <Reports workOrders={workOrders} assets={assets} vendors={vendors} breakdowns={[]} />}
-        {tab==="Calendar" && <MaintenanceCalendar workOrders={workOrders} assets={assets} />}
-        {tab==="Users" && isAdmin && <UserManagement />}
+        {tab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} />}
+        {tab===t(lang,"breakdowns") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} />}
+        {tab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} assets={assets} lang={lang} />}
+        {tab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} lang={lang} />}
+        {tab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
+        {tab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} />}
+        {tab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} />}
+        {tab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
+        {tab===t(lang,"users") && isAdmin && <UserManagement lang={lang} />}
       </div>
     </div>
   );
