@@ -1059,17 +1059,18 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
-  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [search, setSearch] = useState("");
-  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" });
+ const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [search, setSearch] = useState("");
+  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
-  const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter)&&(catFilter==="All"||a.category===catFilter)&&(!search||a.name.toLowerCase().includes(search.toLowerCase())));
+  const owners = ["All",...new Set(assets.map(a => a.owner).filter(Boolean))];
+const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter)&&(catFilter==="All"||a.category===catFilter)&&(ownerFilter==="All"||a.owner===ownerFilter)&&(!search||a.name.toLowerCase().includes(search.toLowerCase())));
 
   const submit = async () => {
     if (!form.name) { setError(t(lang,"assetName")); return; }
     if (form.location==="— Select Site —") { setError(t(lang,"site")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null };
+    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, owner: form.owner||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null };
     const { error: err } = await supabase.from("assets").insert([record]);
     if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" }); setShowForm(false); }
     setSaving(false);
@@ -1090,7 +1091,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
 
   return (
     <div>
-      {editItem && <EditModal lang={lang} title={t(lang,"assets")} data={editItem} fields={[{key:"name",label:t(lang,"assetName")},{key:"category",label:t(lang,"category")},{key:"location",label:t(lang,"site"),options:SITES},{key:"value",label:t(lang,"estValue")},{key:"status",label:t(lang,"status"),options:["Operational","Under Maintenance","Degraded"]},{key:"pm_frequency",label:t(lang,"pmFrequency")},{key:"pm_task",label:t(lang,"pmTask")},{key:"last_service",label:t(lang,"startDate"),type:"date"},{key:"next_service",label:t(lang,"nextServiceDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal lang={lang} title={t(lang,"assets")} data={editItem} fields={[{key:"name",label:t(lang,"assetName")},{key:"category",label:t(lang,"category")},{key:"location",label:t(lang,"site"),options:SITES},{key:"owner",label:t(lang,"owner")},{key:"model",label:t(lang,"model")},{key:"serial_number",label:t(lang,"serialNumber")},{key:"manufacture_date",label:t(lang,"manufactureDate"),type:"date"},{key:"value",label:t(lang,"estValue")},{key:"status",label:t(lang,"status"),options:["Operational","Under Maintenance","Degraded"]},{key:"technical_specs",label:t(lang,"technicalSpecs")},
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} vendors={vendors} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
@@ -1099,22 +1100,32 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
         <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
           <option>{t(lang,"all")}</option>{SITES.filter(s => s!=="— Select Site —").map(s => <option key={s}>{s}</option>)}
         </select>
-        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+       <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
           {categories.map(c => <option key={c}>{c}</option>)}
         </select>
-        <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addAsset")}</Btn>
+        <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+          {owners.map(o => <option key={o}>{o}</option>)}
+        </select>
+        {isAdmin && <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addAsset")}</Btn>}
       </div>
-      {showForm && (
+      {showForm && isAdmin && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"registerNewAsset")}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label={t(lang,"assetName")} value={form.name} onChange={f("name")} />
             <Input label={t(lang,"category")} value={form.category} onChange={f("category")} />
             <Sel label={t(lang,"site")} value={form.location} onChange={f("location")} options={SITES} />
+            <Input label={t(lang,"owner")} value={form.owner} onChange={f("owner")} placeholder="e.g. EPx Logistics" />
+            <Input label={t(lang,"model")} value={form.model} onChange={f("model")} />
+            <Input label={t(lang,"serialNumber")} value={form.serial_number} onChange={f("serial_number")} />
+            <Input label={t(lang,"manufactureDate")} value={form.manufacture_date} onChange={f("manufacture_date")} type="date" />
             <Input label={t(lang,"estValue")} value={form.value} onChange={f("value")} />
             <Input label={t(lang,"nextServiceDate")} value={form.next_service} onChange={f("next_service")} type="date" />
             <Sel label={t(lang,"pmFrequency")} value={form.pm_frequency} onChange={f("pm_frequency")} options={["1","2","3","6","12"]} />
             <Input label={t(lang,"pmTask")} value={form.pm_task} onChange={f("pm_task")} />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"register")}</Btn>
@@ -1133,10 +1144,15 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
                   <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, marginBottom: 14 }}>
-                  {[[t(lang,"site"),a.location],[t(lang,"value"),a.value],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")]].map(([lbl,val]) => (
+                  {[[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"]].map(([lbl,val]) => (
                     <div key={lbl}><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>{lbl}</div><div style={{ color: C.subtle, marginTop: 2 }}>{val||"—"}</div></div>
                   ))}
                 </div>
+                {a.technical_specs && (
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, padding: "8px 10px", background: C.surface, borderRadius: 6, lineHeight: 1.5 }}>
+                    <span style={{ color: C.subtle, fontWeight: 600 }}>{t(lang,"technicalSpecs")}: </span>{a.technical_specs}
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"logChecklist")}</button>
                   <button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"qrCode")}</button>
