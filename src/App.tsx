@@ -1091,7 +1091,7 @@ const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter
 
   return (
     <div>
-      {editItem && <EditModal lang={lang} title={t(lang,"assets")} data={editItem} fields={[{key:"name",label:t(lang,"assetName")},{key:"category",label:t(lang,"category")},{key:"location",label:t(lang,"site"),options:SITES},{key:"owner",label:t(lang,"owner")},{key:"model",label:t(lang,"model")},{key:"serial_number",label:t(lang,"serialNumber")},{key:"manufacture_date",label:t(lang,"manufactureDate"),type:"date"},{key:"value",label:t(lang,"estValue")},{key:"status",label:t(lang,"status"),options:["Operational","Under Maintenance","Degraded"]},{key:"technical_specs",label:t(lang,"technicalSpecs")},
+      {editItem && <EditModal lang={lang} title={t(lang,"assets")} data={editItem} fields={[{key:"name",label:t(lang,"assetName")},{key:"category",label:t(lang,"category")},{key:"location",label:t(lang,"site"),options:SITES},{key:"owner",label:t(lang,"owner")},{key:"model",label:t(lang,"model")},{key:"serial_number",label:t(lang,"serialNumber")},{key:"manufacture_date",label:t(lang,"manufactureDate"),type:"date"},{key:"value",label:t(lang,"estValue")},{key:"status",label:t(lang,"status"),options:["Operational","Under Maintenance","Degraded"]},{key:"technical_specs",label:t(lang,"technicalSpecs")}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} vendors={vendors} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
