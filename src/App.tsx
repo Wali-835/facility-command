@@ -1133,6 +1133,9 @@ const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter
           </div>
         </div>
       )}
+          <div style={{ marginTop: 12 }}>
+            <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
+          </div>
       {loading ? <Spinner lang={lang} /> : (
         <div>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{filtered.length} {t(lang,"assetsShown")}</div>
