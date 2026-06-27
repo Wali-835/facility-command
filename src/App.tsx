@@ -1058,19 +1058,19 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
   const [form, setForm] = useState({ ...data });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
-  const handleModelSelect = (modelName) => {
+ const handleModelSelect = (modelName) => {
     f("model")(modelName);
     const found = mheModels.find(m => m.model === modelName);
     if (found) {
       setForm(p => ({
         ...p,
         model: modelName,
+        brand: found.brand || p.brand || "",
         category: p.category || found.subcategory || found.category || "",
         technical_specs: found.technical_specs || p.technical_specs || "",
       }));
     }
   };
-
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 620, maxHeight: "90vh", overflowY: "auto" }}>
@@ -1080,6 +1080,7 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
           <Input label={t(lang,"category")} value={form.category||""} onChange={f("category")} />
           <Sel label={t(lang,"site")} value={form.location||""} onChange={f("location")} options={SITES} />
           <Input label={t(lang,"owner")} value={form.owner||""} onChange={f("owner")} />
+          <Input label={t(lang,"brand")} value={form.brand||""} onChange={f("brand")} />
           <div>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"model")}</div>
             <input list="mhe-models-edit" value={form.model||""} onChange={e => handleModelSelect(e.target.value)}
@@ -1116,7 +1117,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
   const [mheModels, setMheModels] = useState([]);
 
   useEffect(() => {
-    supabase.from("mhe_models").select("model, category, subcategory, technical_specs").order("brand").order("model")
+    supabase.from("mhe_models").select("brand, model, category, subcategory, technical_specs").order("brand").order("model")
       .then(({ data }) => setMheModels(data || []));
   }, []);
 
@@ -1125,10 +1126,11 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
     const found = mheModels.find(m => m.model === modelName);
     if (found) {
       if (!form.category) f("category")(found.subcategory || found.category || "");
+      f("brand")(found.brand || "");
       f("technical_specs")(found.technical_specs || "");
     }
   };
-  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "" });
+  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
   const owners = ["All",...new Set(assets.map(a => a.owner).filter(Boolean))];
@@ -1145,7 +1147,7 @@ const filtered = assets.filter(a =>
     if (!form.name) { setError(t(lang,"assetName")); return; }
     if (form.location==="— Select Site —") { setError(t(lang,"site")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, owner: form.owner||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null };
+    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, owner: form.owner||null, brand: form.brand||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null,
     const { error: err } = await supabase.from("assets").insert([record]);
     if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" }); setShowForm(false); }
     setSaving(false);
@@ -1233,7 +1235,7 @@ const filtered = assets.filter(a =>
                   <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, marginBottom: 14 }}>
-                  {[[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"]].map(([lbl,val]) => (
+                  {[[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"brand"),a.brand||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"]].map(([lbl,val]) => (
                     <div key={lbl}><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>{lbl}</div><div style={{ color: C.subtle, marginTop: 2 }}>{val||"—"}</div></div>
                   ))}
                 </div>
