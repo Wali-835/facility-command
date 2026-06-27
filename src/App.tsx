@@ -1112,7 +1112,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
-  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [search, setSearch] = useState("");
+  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
 
   useEffect(() => {
@@ -1132,7 +1132,14 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
   const owners = ["All",...new Set(assets.map(a => a.owner).filter(Boolean))];
-const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter)&&(catFilter==="All"||a.category===catFilter)&&(ownerFilter==="All"||a.owner===ownerFilter)&&(!search||a.name.toLowerCase().includes(search.toLowerCase())));
+const modelOptions = ["All",...new Set(assets.map(a => a.model).filter(Boolean))];
+const filtered = assets.filter(a =>
+  (siteFilter==="All"||a.location===siteFilter) &&
+  (catFilter==="All"||a.category===catFilter) &&
+  (ownerFilter==="All"||a.owner===ownerFilter) &&
+  (modelFilter==="All"||a.model===modelFilter) &&
+  (!search||a.name.toLowerCase().includes(search.toLowerCase()))
+);
 
   const submit = async () => {
     if (!form.name) { setError(t(lang,"assetName")); return; }
@@ -1173,6 +1180,9 @@ const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter
         </select>
         <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
           {owners.map(o => <option key={o}>{o}</option>)}
+        </select>
+        <select value={modelFilter} onChange={e => setModelFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+          {modelOptions.map(m => <option key={m}>{m}</option>)}
         </select>
         {isAdmin && <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addAsset")}</Btn>}
       </div>
