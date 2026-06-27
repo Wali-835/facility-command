@@ -1054,7 +1054,60 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
     </div>
   );
 }
+function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
+  const [form, setForm] = useState({ ...data });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
+  const handleModelSelect = (modelName) => {
+    f("model")(modelName);
+    const found = mheModels.find(m => m.model === modelName);
+    if (found) {
+      setForm(p => ({
+        ...p,
+        model: modelName,
+        category: p.category || found.subcategory || found.category || "",
+        technical_specs: found.technical_specs || p.technical_specs || "",
+      }));
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 620, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.accent, marginBottom: 20, textTransform: "uppercase" }}>{t(lang,"edit")} — {data.name}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+          <Input label={t(lang,"assetName")} value={form.name||""} onChange={f("name")} />
+          <Input label={t(lang,"category")} value={form.category||""} onChange={f("category")} />
+          <Sel label={t(lang,"site")} value={form.location||""} onChange={f("location")} options={SITES} />
+          <Input label={t(lang,"owner")} value={form.owner||""} onChange={f("owner")} />
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"model")}</div>
+            <input list="mhe-models-edit" value={form.model||""} onChange={e => handleModelSelect(e.target.value)}
+              placeholder="e.g. ETV 216"
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+            <datalist id="mhe-models-edit">
+              {mheModels.map(m => <option key={m.model} value={m.model} />)}
+            </datalist>
+          </div>
+          <Input label={t(lang,"serialNumber")} value={form.serial_number||""} onChange={f("serial_number")} />
+          <Input label={t(lang,"manufactureDate")} value={form.manufacture_date||""} onChange={f("manufacture_date")} type="date" />
+          <Input label={t(lang,"estValue")} value={form.value||""} onChange={f("value")} />
+          <Sel label={t(lang,"status")} value={form.status||"Operational"} onChange={f("status")} options={["Operational","Under Maintenance","Degraded"]} />
+          <Input label={t(lang,"pmFrequency")} value={form.pm_frequency||""} onChange={f("pm_frequency")} />
+          <Input label={t(lang,"nextServiceDate")} value={form.next_service||""} onChange={f("next_service")} type="date" />
+          <Input label={t(lang,"pmTask")} value={form.pm_task||""} onChange={f("pm_task")} />
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs||""} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+          <Btn onClick={() => onSave(form)}>{t(lang,"save")}</Btn>
+          <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
 function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
@@ -1106,7 +1159,7 @@ const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter
 
   return (
     <div>
-      {editItem && <EditModal lang={lang} title={t(lang,"assets")} data={editItem} fields={[{key:"name",label:t(lang,"assetName")},{key:"category",label:t(lang,"category")},{key:"location",label:t(lang,"site"),options:SITES},{key:"owner",label:t(lang,"owner")},{key:"model",label:t(lang,"model")},{key:"serial_number",label:t(lang,"serialNumber")},{key:"manufacture_date",label:t(lang,"manufactureDate"),type:"date"},{key:"value",label:t(lang,"estValue")},{key:"status",label:t(lang,"status"),options:["Operational","Under Maintenance","Degraded"]},{key:"technical_specs",label:t(lang,"technicalSpecs")}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <AssetEditModal lang={lang} data={editItem} mheModels={mheModels} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} vendors={vendors} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
