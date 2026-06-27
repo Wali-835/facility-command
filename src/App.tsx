@@ -172,7 +172,7 @@ const ConfirmDel = ({ name, onConfirm, onClose, lang }) => (
   </div>
 );
 // ─── ISSUE REPORT MODAL ───────────────────────────────────────────────────────
-function IssueReportModal({ asset, userRole, onClose, onReported, lang }) {
+function IssueReportModal({ asset, userRole, onClose, onReported, onWorkOrderCreated, lang }) {
   const [form, setForm] = useState({ description: "", severity: "Medium", reported_by: userRole.name || "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -197,12 +197,14 @@ function IssueReportModal({ asset, userRole, onClose, onReported, lang }) {
     if (err) { setError(err.message); setSaving(false); return; }
 
     // Auto-create work order
-    await supabase.from("work_orders").insert([{
+    const newWO = {
       id: woId, title: `Issue — ${asset.name}: ${form.description.slice(0,50)}`,
       asset: asset.name, priority: form.severity === "Critical" ? "Critical" : form.severity === "High" ? "High" : "Medium",
       status: "Open", assignee: null,
       start_date: now.split("T")[0], due: null, vendor: null,
-    }]);
+    };
+    await supabase.from("work_orders").insert([newWO]);
+    if (onWorkOrderCreated) onWorkOrderCreated(newWO);
 
     // Send email notification
     try {
@@ -451,7 +453,7 @@ const onIssueReported = (record) => {
         <BreakdownReportModal asset={selectedAsset} userRole={userRole} lang={lang} onClose={() => { setShowReportForm(false); setSelectedAsset(null); }} onReported={onReported} />
       )}
       {showIssueForm && selectedIssueAsset && (
-        <IssueReportModal asset={selectedIssueAsset} userRole={userRole} lang={lang} onClose={() => { setShowIssueForm(false); setSelectedIssueAsset(null); }} onReported={onIssueReported} />
+        <IssueReportModal asset={selectedIssueAsset} userRole={userRole} lang={lang} onClose={() => { setShowIssueForm(false); setSelectedIssueAsset(null); }} onReported={onIssueReported} onWorkOrderCreated={wo => setWorkOrders(prev => [wo, ...prev])} />
       )}
       {resolveItem && (
         <BreakdownResolveModal breakdown={resolveItem} userRole={userRole} vendors={vendors} lang={lang} onClose={() => setResolveItem(null)} onResolved={onResolved} />
