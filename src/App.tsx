@@ -1059,7 +1059,22 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, vendors, lang }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
- const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [search, setSearch] = useState("");
+  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [search, setSearch] = useState("");
+  const [mheModels, setMheModels] = useState([]);
+
+  useEffect(() => {
+    supabase.from("mhe_models").select("model, category, subcategory, technical_specs").order("brand").order("model")
+      .then(({ data }) => setMheModels(data || []));
+  }, []);
+
+  const handleModelSelect = (modelName) => {
+    f("model")(modelName);
+    const found = mheModels.find(m => m.model === modelName);
+    if (found) {
+      if (!form.category) f("category")(found.subcategory || found.category || "");
+      f("technical_specs")(found.technical_specs || "");
+    }
+  };
   const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
@@ -1116,7 +1131,15 @@ const filtered = assets.filter(a => (siteFilter==="All"||a.location===siteFilter
             <Input label={t(lang,"category")} value={form.category} onChange={f("category")} />
             <Sel label={t(lang,"site")} value={form.location} onChange={f("location")} options={SITES} />
             <Input label={t(lang,"owner")} value={form.owner} onChange={f("owner")} placeholder="e.g. EPx Logistics" />
-            <Input label={t(lang,"model")} value={form.model} onChange={f("model")} />
+            <div>
+  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"model")}</div>
+  <input list="mhe-models-list" value={form.model} onChange={e => handleModelSelect(e.target.value)}
+    placeholder="e.g. ETV 216"
+    style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+  <datalist id="mhe-models-list">
+    {mheModels.map(m => <option key={m.model} value={m.model} />)}
+  </datalist>
+</div>
             <Input label={t(lang,"serialNumber")} value={form.serial_number} onChange={f("serial_number")} />
             <Input label={t(lang,"manufactureDate")} value={form.manufacture_date} onChange={f("manufacture_date")} type="date" />
             <Input label={t(lang,"estValue")} value={form.value} onChange={f("value")} />
