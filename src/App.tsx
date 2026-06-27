@@ -171,7 +171,85 @@ const ConfirmDel = ({ name, onConfirm, onClose, lang }) => (
     </div>
   </div>
 );
+// ─── ISSUE REPORT MODAL ───────────────────────────────────────────────────────
+function IssueReportModal({ asset, userRole, onClose, onReported, lang }) {
+  const [form, setForm] = useState({ description: "", severity: "Medium", reported_by: userRole.name || "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
+  const submit = async () => {
+    if (!form.description) { setError(t(lang,"issueDescription")); return; }
+    if (!form.reported_by) { setError(t(lang,"yourName")); return; }
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const issueId = uid("ISS");
+    const woId = uid("WO");
+
+    // Create issue record
+    const record = {
+      id: issueId, asset_id: asset.id, asset_name: asset.name, site: asset.location,
+      reported_by: form.reported_by, reported_at: now,
+      description: form.description, severity: form.severity, status: "Open",
+      work_order_id: woId,
+    };
+    const { error: err } = await supabase.from("issue_reports").insert([record]);
+    if (err) { setError(err.message); setSaving(false); return; }
+
+    // Auto-create work order
+    await supabase.from("work_orders").insert([{
+      id: woId, title: `Issue — ${asset.name}: ${form.description.slice(0,50)}`,
+      asset: asset.name, priority: form.severity === "Critical" ? "Critical" : form.severity === "High" ? "High" : "Medium",
+      status: "Open", assignee: null,
+      start_date: now.split("T")[0], due: null, vendor: null,
+    }]);
+
+    // Send email notification
+    try {
+      await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/notify-breakdown", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ breakdown: { ...record, type: "issue" }, type: "reported" }),
+      });
+    } catch (e) { console.error("Email error:", e); }
+
+    onReported(record);
+    onClose();
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
+      <div style={{ background: C.card, border: `2px solid ${C.yellow}44`, borderRadius: 12, width: "100%", maxWidth: 500 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, background: C.yellow+"11" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.yellow }}>⚠️ {t(lang,"reportIssue")}</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{asset.name} · {asset.location}</div>
+          <div style={{ fontSize: 12, color: C.yellow, marginTop: 6, background: C.yellow+"22", borderRadius: 6, padding: "6px 10px", display: "inline-block" }}>
+            {t(lang,"equipmentStillRunning")}
+          </div>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Input label={t(lang,"yourName")} value={form.reported_by} onChange={f("reported_by")} />
+            <Sel label={t(lang,"severity")} value={form.severity} onChange={f("severity")} options={["Critical","High","Medium","Low"]} />
+            <Textarea label={t(lang,"issueDescription")} value={form.description} onChange={f("description")} placeholder="Describe the issue — noise, leak, warning light, performance drop..." />
+            <div style={{ background: C.green+"11", border: `1px solid ${C.green}44`, borderRadius: 8, padding: 12, fontSize: 12, color: C.green }}>
+              ✅ Equipment status will NOT change — it remains Operational
+            </div>
+            <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 12, fontSize: 12, color: C.blue }}>
+              📋 A work order will be automatically created for maintenance
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+            <Btn onClick={submit} disabled={saving} color={C.yellow}>{saving ? t(lang,"reporting") : `⚠️ ${t(lang,"reportIssue")}`}</Btn>
+            <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 // ─── BREAKDOWN REPORT MODAL ───────────────────────────────────────────────────
 function BreakdownReportModal({ asset, userRole, onClose, onReported, lang }) {
   const [form, setForm] = useState({ description: "", severity: "High", reported_by: userRole.name || "" });
@@ -283,28 +361,39 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
 function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang }) {
   const [breakdowns, setBreakdowns] = useState([]);
+  const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [showReportForm, setShowReportForm] = useState(false);
+  const [showIssueForm, setShowIssueForm] = useState(false);
   const [resolveItem, setResolveItem] = useState(null);
   const [filter, setFilter] = useState("Open");
+  const [activeView, setActiveView] = useState("breakdowns");
   const [selectedAsset, setSelectedAsset] = useState(null);
+  const [selectedIssueAsset, setSelectedIssueAsset] = useState(null);
 
-  useEffect(() => { loadBreakdowns(); }, []);
+  useEffect(() => { loadAll(); }, []);
 
-  const loadBreakdowns = async () => {
+  const loadAll = async () => {
     setLoading(true);
-    const { data } = await supabase.from("breakdown_reports").select("*").order("reported_at", { ascending: false });
-    setBreakdowns(data || []);
+    const [bRes, iRes] = await Promise.all([
+      supabase.from("breakdown_reports").select("*").order("reported_at", { ascending: false }),
+      supabase.from("issue_reports").select("*").order("reported_at", { ascending: false }),
+    ]);
+    setBreakdowns(bRes.data || []);
+    setIssues(iRes.data || []);
     setLoading(false);
   };
 
   const filtered = filter === "All" ? breakdowns : breakdowns.filter(b => b.status === filter);
+  const filteredIssues = filter === "All" ? issues : issues.filter(i => i.status === filter);
   const openCount = breakdowns.filter(b => b.status === "Open").length;
   const acknowledgedCount = breakdowns.filter(b => b.status === "Acknowledged").length;
   const resolvedCount = breakdowns.filter(b => b.status === "Resolved").length;
   const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0);
+  const openIssues = issues.filter(i => i.status === "Open").length;
+  const resolvedIssues = issues.filter(i => i.status === "Resolved").length;
 
   const onReported = async (record) => {
     setBreakdowns(prev => [record, ...prev]);
@@ -331,7 +420,24 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
     } catch (e) { console.error("Email error:", e); }
     setSuccess(t(lang,"breakdownResolved"));
   };
+const onIssueReported = (record) => {
+    setIssues(prev => [record, ...prev]);
+    setSuccess(t(lang,"issueReported"));
+  };
 
+  const resolveIssue = async (issue) => {
+    const now = new Date().toISOString();
+    await supabase.from("issue_reports").update({ status: "Resolved", resolved_by: userRole.name || "", resolved_at: now }).eq("id", issue.id);
+    if (issue.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
+    setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, status: "Resolved", resolved_by: userRole.name, resolved_at: now } : i));
+    setSuccess(t(lang,"resolved"));
+  };
+
+  const acknowledgeIssue = async (issue) => {
+    const now = new Date().toISOString();
+    await supabase.from("issue_reports").update({ status: "Acknowledged", acknowledged_by: userRole.name || "", acknowledged_at: now }).eq("id", issue.id);
+    setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, status: "Acknowledged", acknowledged_by: userRole.name, acknowledged_at: now } : i));
+  };
   const acknowledge = async (b) => {
     const now = new Date().toISOString();
     const { error: err } = await supabase.from("breakdown_reports").update({ status: "Acknowledged", acknowledged_by: userRole.name || "", acknowledged_at: now }).eq("id", b.id);
@@ -344,45 +450,67 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
       {showReportForm && selectedAsset && (
         <BreakdownReportModal asset={selectedAsset} userRole={userRole} lang={lang} onClose={() => { setShowReportForm(false); setSelectedAsset(null); }} onReported={onReported} />
       )}
+      {showIssueForm && selectedIssueAsset && (
+        <IssueReportModal asset={selectedIssueAsset} userRole={userRole} lang={lang} onClose={() => { setShowIssueForm(false); setSelectedIssueAsset(null); }} onReported={onIssueReported} />
+      )}
       {resolveItem && (
         <BreakdownResolveModal breakdown={resolveItem} userRole={userRole} vendors={vendors} lang={lang} onClose={() => setResolveItem(null)} onResolved={onResolved} />
       )}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
 
+      {/* Stats */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
         <StatCard icon="🚨" label={t(lang,"openBreakdowns")} value={openCount} sub={t(lang,"needsAttention")} color={C.red} />
+        <StatCard icon="⚠️" label={t(lang,"openIssues")} value={openIssues} sub={t(lang,"equipmentStillRunning")} color={C.yellow} />
         <StatCard icon="👁" label={t(lang,"acknowledged")} value={acknowledgedCount} sub={t(lang,"beingHandled")} color={C.blue} />
-        <StatCard icon="✅" label={t(lang,"resolved")} value={resolvedCount} sub={t(lang,"thisPeriod")} color={C.green} />
-        <StatCard icon="⏱" label={t(lang,"totalDowntime")} value={formatDowntime(totalDowntimeMins)} sub={t(lang,"allBreakdowns")} color={C.yellow} />
+        <StatCard icon="✅" label={t(lang,"resolved")} value={resolvedCount + resolvedIssues} sub={t(lang,"thisPeriod")} color={C.green} />
+        <StatCard icon="⏱" label={t(lang,"totalDowntime")} value={formatDowntime(totalDowntimeMins)} sub={t(lang,"allBreakdowns")} color={C.purple} />
         <StatCard icon="🏭" label={t(lang,"assetsDown")} value={assets.filter(a => a.status === "Under Maintenance").length} sub={t(lang,"currentlyOffline")} color={C.accent} />
       </div>
 
-      {(userRole.role === "operations" || userRole.role === "admin") && (
-        <div style={{ background: C.card, border: `1px solid ${C.red}33`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>{t(lang,"reportEquipmentBreakdown")}</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+      {/* Report Buttons */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+        <div style={{ background: C.card, border: `1px solid ${C.red}33`, borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 8 }}>🚨 {t(lang,"reportEquipmentBreakdown")}</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Equipment is DOWN — downtime starts now</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <select onChange={e => setSelectedAsset(assets.find(a => a.id === e.target.value) || null)}
-              style={{ flex: 1, minWidth: 200, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
+              style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 13 }}>
               <option value="">{t(lang,"selectEquipment")}</option>
               {assets.filter(a => a.status !== "Under Maintenance").map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
             </select>
-            <Btn onClick={() => { if (!selectedAsset) { setError(t(lang,"selectEquipment")); return; } setShowReportForm(true); }} color={C.red}>
-              🚨 {t(lang,"reportBreakdown")}
-            </Btn>
+            <Btn onClick={() => { if (!selectedAsset) { setError(t(lang,"selectEquipment")); return; } setShowReportForm(true); }} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
           </div>
         </div>
-      )}
+        <div style={{ background: C.card, border: `1px solid ${C.yellow}33`, borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>⚠️ {t(lang,"reportEquipmentIssue")}</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Equipment is still RUNNING — issue needs attention</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select onChange={e => setSelectedIssueAsset(assets.find(a => a.id === e.target.value) || null)}
+              style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 13 }}>
+              <option value="">{t(lang,"selectEquipment")}</option>
+              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
+            </select>
+            <Btn onClick={() => { if (!selectedIssueAsset) { setError(t(lang,"selectEquipment")); return; } setShowIssueForm(true); }} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
+          </div>
+        </div>
+      </div>
 
+      {/* View Toggle */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setActiveView("breakdowns")} style={{ background: activeView==="breakdowns"?C.red:C.card, color: activeView==="breakdowns"?"#fff":C.muted, border: `1px solid ${activeView==="breakdowns"?C.red:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>🚨 {t(lang,"breakdowns")} ({breakdowns.filter(b=>b.status==="Open").length})</button>
+          <button onClick={() => setActiveView("issues")} style={{ background: activeView==="issues"?C.yellow:C.card, color: activeView==="issues"?"#fff":C.muted, border: `1px solid ${activeView==="issues"?C.yellow:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>⚠️ {t(lang,"issues")} ({issues.filter(i=>i.status==="Open").length})</button>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
           {["All","Open","Acknowledged","Resolved"].map(s => (
-            <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+            <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
               {s === "All" ? t(lang,"all") : s === "Open" ? t(lang,"open") : s === "Acknowledged" ? t(lang,"acknowledged") : t(lang,"resolved")}
             </button>
           ))}
+          <button onClick={loadAll} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↻</button>
         </div>
-        <button onClick={loadBreakdowns} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↻ {t(lang,"refresh")}</button>
       </div>
 
       {loading ? <Spinner lang={lang} /> : filtered.length === 0 ? (
@@ -448,7 +576,57 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
     </div>
   );
 }
-
+{/* Issues List */}
+      {activeView === "issues" && (
+        loading ? <Spinner lang={lang} /> : filteredIssues.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noIssuesFound")}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {filteredIssues.map(issue => {
+              const isResolved = issue.status === "Resolved";
+              const isAcknowledged = issue.status === "Acknowledged";
+              return (
+                <div key={issue.id} style={{ background: C.card, border: `1px solid ${isResolved?C.green+"44":isAcknowledged?C.blue+"44":C.yellow+"44"}`, borderRadius: 10, padding: 20 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 18 }}>{isResolved?"✅":isAcknowledged?"👁":"⚠️"}</span>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{issue.asset_name}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: C.muted }}>{issue.site} · {t(lang,"reportedBy")} {issue.reported_by} · {fmtDateTime(issue.reported_at)}</div>
+                      {isAcknowledged && issue.acknowledged_by && (
+                        <div style={{ fontSize: 12, color: C.blue, marginTop: 4 }}>👁 {t(lang,"acknowledged")}: {issue.acknowledged_by}</div>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <Badge label={issue.severity} color={SEVERITY_COLORS[issue.severity]||C.muted} />
+                      <Badge label={issue.status} color={statusColor(issue.status)} />
+                      <div style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 4, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>RUNNING</div>
+                    </div>
+                  </div>
+                  <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: C.subtle }}>
+                    <strong style={{ color: C.text }}>{t(lang,"issue")}:</strong> {issue.description}
+                  </div>
+                  {issue.work_order_id && (
+                    <div style={{ fontSize: 12, color: C.blue, marginBottom: 12 }}>📋 {t(lang,"workOrders")}: {issue.work_order_id}</div>
+                  )}
+                  {isResolved && issue.resolution_notes && (
+                    <div style={{ background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: C.subtle }}>
+                      <strong style={{ color: C.green }}>✅ {t(lang,"resolvedBy")} {issue.resolved_by}:</strong> {issue.resolution_notes}
+                    </div>
+                  )}
+                  {!isResolved && (userRole.role === "maintenance" || userRole.role === "admin") && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {issue.status === "Open" && <Btn onClick={() => acknowledgeIssue(issue)} color={C.blue}>{t(lang,"acknowledge")}</Btn>}
+                      <Btn onClick={() => resolveIssue(issue)} color={C.green}>{t(lang,"markResolved")}</Btn>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
 // ─── CIL CHECKLIST MODAL ─────────────────────────────────────────────────────
 function ChecklistModal({ asset, workOrderId, onClose, lang }) {
   const [items, setItems] = useState([]);
@@ -1907,7 +2085,7 @@ export default function App() {
 
   const tabs = [
     t(lang,"overview"),
-    t(lang,"breakdowns"),
+    t(lang,"breakdownsAndIssues"),
     ...(userRole.role !== "operations" ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
     ...(isAdmin ? [t(lang,"users")] : []),
   ];
@@ -1942,7 +2120,7 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} />}
-        {activeTab===t(lang,"breakdowns") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} />}
+        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} assets={assets} lang={lang} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} lang={lang} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
