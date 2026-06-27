@@ -513,7 +513,7 @@ const onIssueReported = (record) => {
         </div>
       </div>
 
-      {loading ? <Spinner lang={lang} /> : filtered.length === 0 ? (
+      {activeView === "breakdowns" && (loading ? <Spinner lang={lang} /> : filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noBreakdownsFound")}</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -572,11 +572,9 @@ const onIssueReported = (record) => {
             );
           })}
         </div>
-      )}
-    </div>
-  );
-}
-{/* Issues List */}
+      ))}
+
+      {/* Issues List */}
       {activeView === "issues" && (
         loading ? <Spinner lang={lang} /> : filteredIssues.length === 0 ? (
           <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noIssuesFound")}</div>
