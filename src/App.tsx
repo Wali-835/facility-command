@@ -623,8 +623,12 @@ const onIssueReported = (record) => {
               );
             })}
           </div>
-        )
+       )
       )}
+    </div>
+  );
+}
+
 // ─── CIL CHECKLIST MODAL ─────────────────────────────────────────────────────
 function ChecklistModal({ asset, workOrderId, onClose, lang }) {
   const [items, setItems] = useState([]);
