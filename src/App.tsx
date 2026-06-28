@@ -1136,6 +1136,7 @@ function WorkOrderPhotosModal({ workOrder, onClose, lang }) {
 }
 
 const WO_CATEGORIES = ["MHE","HVAC","Fire Alarm & Suppression","Electrical","Plumbing","Civil & Structural","Security Systems","Lighting","General Maintenance"];
+const WO_STATUSES = ["Open","In Progress","Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled","Completed"];
 const CATEGORY_ICONS = { "MHE":"🏭","HVAC":"❄️","Fire Alarm & Suppression":"🔥","Electrical":"⚡","Plumbing":"🔧","Civil & Structural":"🏗️","Security Systems":"🔒","Lighting":"💡","General Maintenance":"🔨" };
 
 function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors, assets, lang }) {
@@ -1145,10 +1146,13 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null);
   const [selectedWO, setSelectedWO] = useState(null);
+  const [noteItem, setNoteItem] = useState(null);
+  const [noteText, setNoteText] = useState("");
   const [siteFilter, setSiteFilter] = useState("All");
   const [catFilter, setCatFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Active");
   const [showArchived, setShowArchived] = useState(false);
+  const [archiveMonth, setArchiveMonth] = useState("All");
   const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —",...vendors.filter(v => v.status==="Active").map(v => v.name)];
@@ -1167,11 +1171,21 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   const applyFilters = (list) => list.filter(w =>
     (siteFilter === "All" || w.site === siteFilter) &&
     (catFilter === "All" || w.category === catFilter) &&
-    (statusFilter === "All" || w.status === statusFilter)
+    (statusFilter === "All" || statusFilter === "Active" || w.status === statusFilter)
   );
 
   const filteredActive = applyFilters(activeWOs);
-  const filteredArchived = applyFilters(archivedWOs);
+  const filteredArchived = applyFilters(archivedWOs).filter(w => {
+    if (archiveMonth === "All") return true;
+    const d = new Date(w.updated_at || w.start_date || "");
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}` === archiveMonth;
+  });
+
+  // Get unique months from archived WOs for filter
+  const archiveMonths = ["All", ...new Set(archivedWOs.map(w => {
+    const d = new Date(w.updated_at || w.start_date || "");
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+  }).filter(Boolean)).values()].sort().reverse();
 
   // Group by site
   const groupBySite = (list) => {
@@ -1237,13 +1251,20 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
 
   const updatePriority = async (id, val) => { await supabase.from("work_orders").update({ priority: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,priority:val}:wo)); };
   const saveEdit = async (updated) => { const { error: err } = await supabase.from("work_orders").update(updated).eq("id",updated.id); if (!err) { setWorkOrders(prev => prev.map(wo => wo.id===updated.id?updated:wo)); setEditItem(null); } else setError(err.message); };
+  const saveNote = async () => {
+    if (!noteItem) return;
+    await supabase.from("work_orders").update({ status_note: noteText }).eq("id", noteItem.id);
+    setWorkOrders(prev => prev.map(w => w.id === noteItem.id ? { ...w, status_note: noteText } : w));
+    setNoteItem(null);
+    setNoteText("");
+  };
   const confirmDelete = async () => { await supabase.from("work_orders").delete().eq("id",deleteItem.id); setWorkOrders(prev => prev.filter(wo => wo.id!==deleteItem.id)); setDeleteItem(null); };
 
   const WOTable = ({ wos }) => (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-          {[t(lang,"id"),t(lang,"title"),t(lang,"asset"),t(lang,"category"),t(lang,"priority"),t(lang,"status"),t(lang,"vendor"),t(lang,"due"),t(lang,"photos"),...(isAdmin?[t(lang,"actions")]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>{h}</th>)}
+          {[t(lang,"id"),t(lang,"title"),t(lang,"asset"),t(lang,"category"),t(lang,"priority"),t(lang,"status"),t(lang,"lastUpdate"),t(lang,"vendor"),t(lang,"due"),t(lang,"photos"),...(isAdmin?[t(lang,"actions")]:[])].map(h =>
         </tr></thead>
         <tbody>
           {wos.map((wo,i) => (
@@ -1253,7 +1274,17 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{CATEGORY_ICONS[wo.category]||"🔧"} {wo.category||"—"}</td>
               <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
-              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={["Open","In Progress","Pending","Completed"]} onChange={val => updateStatus(wo.id,val)} /></td>
+              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={WO_STATUSES} onChange={val => updateStatus(wo.id,val)} />
+                <td style={{ padding: "10px 12px", maxWidth: 200 }}>
+                {wo.status_note ? (
+                  <div style={{ fontSize: 11, color: C.subtle, background: C.surface, borderRadius: 4, padding: "4px 8px" }}>{wo.status_note}</div>
+                ) : (
+                  isAdmin && <button onClick={() => { setNoteItem(wo); setNoteText(wo.status_note||""); }} style={{ fontSize: 11, color: C.muted, background: "transparent", border: `1px dashed ${C.border}`, borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}>+ {t(lang,"addUpdate")}</button>
+                )}
+                {wo.status_note && isAdmin && (
+                  <button onClick={() => { setNoteItem(wo); setNoteText(wo.status_note||""); }} style={{ fontSize: 10, color: C.muted, background: "transparent", border: "none", cursor: "pointer", display: "block", marginTop: 2 }}>✏️ {t(lang,"edit")}</button>
+                )}
+              </td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor||"—"}</td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>{wo.due||"—"}</td>
               <td style={{ padding: "10px 12px" }}>
@@ -1273,7 +1304,27 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
   return (
     <div>
       {selectedWO && <WorkOrderPhotosModal workOrder={selectedWO} lang={lang} onClose={() => setSelectedWO(null)} />}
-      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:SITES},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:["Open","In Progress","Pending","Completed"]},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {noteItem && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 460 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.accent, marginBottom: 4 }}>{t(lang,"statusUpdate")}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{noteItem.title}</div>
+            <textarea value={noteText} onChange={e => setNoteText(e.target.value)}
+              placeholder="e.g. Awaiting PO approval from procurement team..."
+              rows={3} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box", resize: "vertical", marginBottom: 16 }} />
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              {["Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled"].map(s => (
+                <button key={s} onClick={() => setNoteText(s)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", fontSize: 11, color: C.subtle, cursor: "pointer" }}>{s}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn onClick={saveNote}>{t(lang,"save")}</Btn>
+              <Btn variant="secondary" onClick={() => { setNoteItem(null); setNoteText(""); }}>{t(lang,"cancel")}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:SITES},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
 
@@ -1315,9 +1366,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
             <option value="Active">Active</option>
             <option value="All">{t(lang,"all")}</option>
-            <option value="Open">{t(lang,"open")}</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Pending">Pending</option>
+            {WO_STATUSES.filter(s => s !== "Completed").map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newWorkOrder")}</Btn>
@@ -1371,14 +1420,21 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
 
           {/* Archived Section */}
           <div style={{ marginTop: 24, borderTop: `1px solid ${C.border}`, paddingTop: 20 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.muted }}>📦 {t(lang,"archived")}</div>
                 <Badge label={`${archivedWOs.length}`} color={C.muted} />
               </div>
-              <button onClick={() => setShowArchived(v => !v)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>
-                {showArchived ? t(lang,"hideArchived") : t(lang,"showArchived")}
-              </button>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {showArchived && (
+                  <select value={archiveMonth} onChange={e => setArchiveMonth(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.text, fontSize: 12 }}>
+                    {archiveMonths.map(m => <option key={m} value={m}>{m === "All" ? t(lang,"all") : m}</option>)}
+                  </select>
+                )}
+                <button onClick={() => setShowArchived(v => !v)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>
+                  {showArchived ? t(lang,"hideArchived") : t(lang,"showArchived")}
+                </button>
+              </div>
             </div>
             {showArchived && (
               <div>
