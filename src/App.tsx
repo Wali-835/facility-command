@@ -1244,7 +1244,11 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
     if (val === "Completed" && wo?.status !== "Completed" && wo?.asset) {
       const { data: assetData } = await supabase.from("assets").select("id").eq("name", wo.asset).single();
       if (assetData) {
-        await supabase.from("maintenance_logs").insert([{ id: uid("LOG"), asset_id: assetData.id, asset_name: wo.asset, log_type: wo.title.startsWith("PM -") ? "Preventive Maintenance" : "Corrective Repair", title: wo.title, description: `Work order completed.\nCategory: ${wo.category||"—"}\nVendor: ${wo.vendor||"—"}\nPriority: ${wo.priority}`, performed_by: wo.assignee||"—", vendor: wo.vendor||null, start_date: wo.start_date||TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: null, downtime_end: null, downtime_hours: null }]);
+        await supabase.from("maintenance_logs").insert([{ id: uid("LOG"), asset_id: assetData.id, asset_name: wo.asset, log_type: wo.title.startsWith("PM -") ? "Preventive Maintenance" : "Corrective Repair", title: wo.title, description: `Work order completed on ${TODAY}.\nCategory: ${wo.category||"—"}\nVendor: ${wo.vendor||"—"}\nPriority: ${wo.priority}`, performed_by: wo.assignee||"—", vendor: wo.vendor||null, start_date: wo.start_date||TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: null, downtime_end: null, downtime_hours: null }]);
+        // Update last_pm_date to actual completion date for PM work orders
+        if (wo.title.startsWith("PM -")) {
+          await supabase.from("assets").update({ last_pm_date: TODAY }).eq("id", assetData.id);
+        }
       }
     }
   };
@@ -1790,7 +1794,7 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang }) {
     const dueDate=new Date(now.getFullYear(),now.getMonth()+1,0).toISOString().split("T")[0];
     const newWOs=due.map(a => ({ id: uid("WO"), title: `PM - ${a.name}`, asset: a.name, priority: "Medium", status: "Open", assignee: null, start_date: TODAY, due: dueDate, vendor: null }));
     const { error: err }=await supabase.from("work_orders").insert(newWOs);
-    if (err) { setError(err.message); } else { await supabase.from("assets").update({ last_pm_date: TODAY }).in("id",due.map(a => a.id)); setSuccess(`Generated ${newWOs.length}!`); onWorkOrdersGenerated(newWOs); }
+    if (err) { setError(err.message); } else { setSuccess(`Generated ${newWOs.length}!`); onWorkOrdersGenerated(newWOs); }
     setGenerating(false);
   };
 
