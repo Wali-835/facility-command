@@ -431,6 +431,26 @@ const onIssueReported = (record) => {
     const now = new Date().toISOString();
     await supabase.from("issue_reports").update({ status: "Resolved", resolved_by: userRole.name || "", resolved_at: now }).eq("id", issue.id);
     if (issue.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
+
+    // Auto-create maintenance log
+    await supabase.from("maintenance_logs").insert([{
+      id: uid("LOG"),
+      asset_id: issue.asset_id,
+      asset_name: issue.asset_name,
+      log_type: "Corrective Repair",
+      title: `Issue Resolved — ${issue.severity} severity`,
+      description: `ISSUE REPORTED BY: ${issue.reported_by}\n\nDESCRIPTION: ${issue.description}\n\nRESOLVED BY: ${userRole.name || ""}`,
+      performed_by: userRole.name || "",
+      vendor: null,
+      start_date: issue.reported_at ? issue.reported_at.split("T")[0] : TODAY,
+      end_date: TODAY,
+      cost: null,
+      status: "Completed",
+      downtime_start: null,
+      downtime_end: null,
+      downtime_hours: null,
+    }]);
+
     setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, status: "Resolved", resolved_by: userRole.name, resolved_at: now } : i));
     setSuccess(t(lang,"resolved"));
   };
