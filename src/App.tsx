@@ -974,7 +974,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
     const unitCost = parseFloat(partForm.unit_cost)||0;
     const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier, asset_part_id: partForm.asset_part_id||null };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
-    if (err) { setError(err.message); } else { setSuccess("✓"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null });
+    if (err) { setError(err.message); } else { setSuccess("✓"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null }); setShowPartForm(null); }
     setSaving(false);
   };
 
@@ -1137,10 +1137,22 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                         <div style={{ marginTop: 14 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{t(lang,"spareParts")}</div>
-                            {isAdmin && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>{t(lang,"addPart")}</Btn>}
+                            {(isAdmin || isSupervisor || userRole?.role === "maintenance") && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>{t(lang,"addPart")}</Btn>}
                           </div>
                           {showPartForm===log.id && (
                             <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                              {catalogParts.length > 0 && (
+                                <div style={{ marginBottom: 10 }}>
+                                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>{t(lang,"selectFromCatalog")}</div>
+                                  <select onChange={e => {
+                                    const found = catalogParts.find(p => p.id === e.target.value);
+                                    if (found) setPartForm({ part_name: found.part_name, part_number: found.part_number||"", quantity: "1", unit_cost: String(found.unit_cost||""), supplier: found.supplier||"", asset_part_id: found.id });
+                                  }} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px", color: C.text, fontSize: 13 }}>
+                                    <option value="">{t(lang,"selectFromCatalog")}</option>
+                                    {catalogParts.map(p => <option key={p.id} value={p.id}>{p.part_name} {p.part_number?`(${p.part_number})`:""} — ${p.unit_cost} {p.stock_quantity<=p.min_stock_level?`⚠️ ${p.stock_quantity} left`:""}</option>)}
+                                  </select>
+                                </div>
+                              )}
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
                                 <Input label={t(lang,"partName")} value={partForm.part_name} onChange={pf("part_name")} />
                                 <Input label={t(lang,"partNumber")} value={partForm.part_number} onChange={pf("part_number")} />
