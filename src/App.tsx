@@ -1274,7 +1274,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{CATEGORY_ICONS[wo.category]||"🔧"} {wo.category||"—"}</td>
               <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
-              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={WO_STATUSES} onChange={val => updateStatus(wo.id,val)} />
+              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={WO_STATUSES} onChange={val => updateStatus(wo.id,val)} /></td>
                 <td style={{ padding: "10px 12px", maxWidth: 200 }}>
                 {wo.status_note ? (
                   <div style={{ fontSize: 11, color: C.subtle, background: C.surface, borderRadius: 4, padding: "4px 8px" }}>{wo.status_note}</div>
