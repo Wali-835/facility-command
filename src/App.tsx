@@ -361,7 +361,7 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
 }
 
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
-function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang }) {
+function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent }) {
   const [breakdowns, setBreakdowns] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -423,7 +423,7 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
     setSuccess(t(lang,"breakdownResolved"));
   };
 const onIssueReported = (record) => {
-    setIssues(prev => [record, ...prev]);
+    setIssues(prev => { const updated = [record, ...prev]; if (setIssuesFromParent) setIssuesFromParent(updated); return updated; });
     setSuccess(t(lang,"issueReported"));
   };
 
@@ -451,7 +451,7 @@ const onIssueReported = (record) => {
       downtime_hours: null,
     }]);
 
-    setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, status: "Resolved", resolved_by: userRole.name, resolved_at: now } : i));
+    setIssues(prev => { const updated = prev.map(i => i.id === issue.id ? { ...i, status: "Resolved", resolved_by: userRole.name, resolved_at: now } : i); if (setIssuesFromParent) setIssuesFromParent(updated); return updated; });
     setSuccess(t(lang,"resolved"));
   };
 
@@ -1803,7 +1803,7 @@ function MaintenanceCalendar({ workOrders, assets, lang }) {
   );
 }
 
-function Reports({ workOrders, assets, vendors, lang }) {
+function Reports({ workOrders, assets, vendors, lang, issues }) {
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
     const woData = workOrders.map(wo => ({ "ID": wo.id, "Title": wo.title, "Asset": wo.asset, "Priority": wo.priority, "Status": wo.status, "Vendor": wo.vendor||"—", "Start Date": wo.start_date||"—", "Due Date": wo.due||"—" }));
@@ -1854,6 +1854,7 @@ function Reports({ workOrders, assets, vendors, lang }) {
   const pmDue=assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length; const pmCompliance=totalAssets>0?Math.round(((totalAssets-pmDue)/totalAssets)*100):0; const pmLogs=logs.filter(l => l.log_type==="Preventive Maintenance").length; const correctiveLogs=logs.filter(l => l.log_type==="Corrective Repair").length;
   const activeVendors=vendors.filter(v => v.status==="Active").length; const vendorWOs=vendors.map(v => ({ name: v.name, open: workOrders.filter(w => w.vendor===v.name&&w.status!=="Completed").length, completed: workOrders.filter(w => w.vendor===v.name&&w.status==="Completed").length, rating: v.rating })).filter(v => v.open+v.completed>0).sort((a,b) => (b.open+b.completed)-(a.open+a.completed));
   const totalBreakdowns=breakdowns.length; const resolvedBreakdowns=breakdowns.filter(b => b.status==="Resolved").length; const avgDowntime=resolvedBreakdowns>0?Math.round(breakdowns.filter(b => b.downtime_hours).reduce((s,b) => s+(b.downtime_hours||0),0)/resolvedBreakdowns):0;
+  const totalIssues=(issues||[]).length; const resolvedIssues=(issues||[]).filter(i => i.status==="Resolved").length; const openIssues=(issues||[]).filter(i => i.status==="Open").length;
   const siteData=SITES.filter(s => s!=="— Select Site —").map(site => ({ site, total: assets.filter(a => a.location===site).length, down: assets.filter(a => a.location===site&&a.status==="Under Maintenance").length })).filter(s => s.total>0);
 
   const KpiCard = ({ icon, label, value, sub, color, percent }) => (
@@ -1938,6 +1939,13 @@ function Reports({ workOrders, assets, vendors, lang }) {
               <KpiCard icon="✅" label={t(lang,"resolved")} value={resolvedBreakdowns} color={C.green} percent={totalBreakdowns>0?Math.round((resolvedBreakdowns/totalBreakdowns)*100):0} />
               <KpiCard icon="⏱" label={t(lang,"totalDowntime")} value={formatDowntime(avgDowntime)} color={C.yellow} />
               <KpiCard icon="🔓" label={t(lang,"openBreakdowns")} value={totalBreakdowns-resolvedBreakdowns} color={C.accent} />
+            </div>
+            <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14, marginTop: 16 }}>⚠️ {t(lang,"issues")}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 16 }}>
+              <KpiCard icon="⚠️" label={t(lang,"openIssues")} value={openIssues} color={C.yellow} />
+              <KpiCard icon="✅" label={t(lang,"resolved")} value={resolvedIssues} color={C.green} percent={totalIssues>0?Math.round((resolvedIssues/totalIssues)*100):0} />
+              <KpiCard icon="📋" label={t(lang,"allIssues")} value={totalIssues} color={C.blue} />
+              <KpiCard icon="👁" label={t(lang,"acknowledged")} value={(issues||[]).filter(i=>i.status==="Acknowledged").length} color={C.purple} />
             </div>
             {breakdowns.length>0 && <BarChart title={t(lang,"breakdownAnalysis")} data={SITES.filter(s => s!=="— Select Site —").map(site => ({ label: site, count: breakdowns.filter(b => b.site===site).length, color: C.red })).filter(s => s.count>0)} labelKey="label" valueKey="count" colorKey="color" />}
           </div>
@@ -2055,7 +2063,7 @@ export default function App() {
   const [userRole, setUserRole] = useState({ role: "operations", name: "", site: "", language: "en" });
   const [lang, setLang] = useState("en");
   const [tab, setTab] = useState(null);
-  const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]);
+  const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]); const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
   const isAdmin = session?.user?.email === ADMIN_EMAIL || userRole.role === "admin";
@@ -2087,13 +2095,14 @@ export default function App() {
 
   const load = useCallback(async () => {
     setLoading({ workOrders: true, assets: true, vendors: true });
-    const [woRes, astRes, vndRes] = await Promise.all([
+    const [woRes, astRes, vndRes, issRes] = await Promise.all([
       supabase.from("work_orders").select("*").order("due", { ascending: true }),
       supabase.from("assets").select("*").order("name", { ascending: true }),
       supabase.from("vendors").select("*").order("name", { ascending: true }),
+      supabase.from("issue_reports").select("*").order("reported_at", { ascending: false }),
     ]);
     if (woRes.error||astRes.error||vndRes.error) { setGlobalError("Failed to load data."); }
-    else { setWorkOrders(woRes.data||[]); setAssets(astRes.data||[]); setVendors(vndRes.data||[]); }
+    else { setWorkOrders(woRes.data||[]); setAssets(astRes.data||[]); setVendors(vndRes.data||[]); setIssues(issRes.data||[]); }
     setLoading({ workOrders: false, assets: false, vendors: false });
   }, []);
 
@@ -2144,12 +2153,12 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} />}
-        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} />}
+        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} issuesFromParent={issues} setIssuesFromParent={setIssues} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} assets={assets} lang={lang} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} vendors={vendors} lang={lang} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
         {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} />}
-        {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} />}
+        {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} />}
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
         {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} />}
       </div>
