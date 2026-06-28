@@ -1264,7 +1264,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-          {[t(lang,"id"),t(lang,"title"),t(lang,"asset"),t(lang,"category"),t(lang,"priority"),t(lang,"status"),t(lang,"lastUpdate"),t(lang,"vendor"),t(lang,"due"),t(lang,"photos"),...(isAdmin?[t(lang,"actions")]:[])].map(h =>
+          {[t(lang,"id"),t(lang,"title"),t(lang,"asset"),t(lang,"category"),t(lang,"priority"),t(lang,"status"),t(lang,"lastUpdate"),t(lang,"vendor"),t(lang,"due"),t(lang,"photos"),...(isAdmin?[t(lang,"actions")]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>{h}</th>)}
         </tr></thead>
         <tbody>
           {wos.map((wo,i) => (
