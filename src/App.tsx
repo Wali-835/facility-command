@@ -1135,20 +1135,73 @@ function WorkOrderPhotosModal({ workOrder, onClose, lang }) {
   );
 }
 
+const WO_CATEGORIES = ["MHE","HVAC","Fire Alarm & Suppression","Electrical","Plumbing","Civil & Structural","Security Systems","Lighting","General Maintenance"];
+const CATEGORY_ICONS = { "MHE":"🏭","HVAC":"❄️","Fire Alarm & Suppression":"🔥","Electrical":"⚡","Plumbing":"🔧","Civil & Structural":"🏗️","Security Systems":"🔒","Lighting":"💡","General Maintenance":"🔨" };
+
 function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendors, assets, lang }) {
-  const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null); const [filter, setFilter] = useState("All");
-  const [editItem, setEditItem] = useState(null); const [deleteItem, setDeleteItem] = useState(null); const [selectedWO, setSelectedWO] = useState(null);
-  const [form, setForm] = useState({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [editItem, setEditItem] = useState(null);
+  const [deleteItem, setDeleteItem] = useState(null);
+  const [selectedWO, setSelectedWO] = useState(null);
+  const [siteFilter, setSiteFilter] = useState("All");
+  const [catFilter, setCatFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("Active");
+  const [showArchived, setShowArchived] = useState(false);
+  const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
-  const filtered = filter==="All" ? workOrders : workOrders.filter(w => w.status===filter);
   const vendorOptions = ["— None —",...vendors.filter(v => v.status==="Active").map(v => v.name)];
 
+  // Auto-set site when asset is selected
+  const handleAssetSelect = (assetName) => {
+    f("asset")(assetName);
+    const found = assets.find(a => a.name === assetName);
+    if (found) f("site")(found.location);
+  };
+
+  // Split active vs archived
+  const activeWOs = workOrders.filter(w => w.status !== "Completed");
+  const archivedWOs = workOrders.filter(w => w.status === "Completed");
+
+  const applyFilters = (list) => list.filter(w =>
+    (siteFilter === "All" || w.site === siteFilter) &&
+    (catFilter === "All" || w.category === catFilter) &&
+    (statusFilter === "All" || w.status === statusFilter)
+  );
+
+  const filteredActive = applyFilters(activeWOs);
+  const filteredArchived = applyFilters(archivedWOs);
+
+  // Group by site
+  const groupBySite = (list) => {
+    const groups = {};
+    list.forEach(wo => {
+      const site = wo.site || "Unassigned";
+      if (!groups[site]) groups[site] = [];
+      groups[site].push(wo);
+    });
+    return groups;
+  };
+
+  const activeGroups = siteFilter === "All" ? groupBySite(filteredActive) : { [siteFilter]: filteredActive };
+  const archivedGroups = siteFilter === "All" ? groupBySite(filteredArchived) : { [siteFilter]: filteredArchived };
+
+  // Per-site KPIs
+  const siteKPIs = SITES.filter(s => s !== "— Select Site —").map(site => ({
+    site,
+    open: workOrders.filter(w => w.site === site && w.status === "Open").length,
+    inProgress: workOrders.filter(w => w.site === site && w.status === "In Progress").length,
+    overdue: workOrders.filter(w => w.site === site && w.due && w.due <= TODAY && w.status !== "Completed").length,
+    total: workOrders.filter(w => w.site === site && w.status !== "Completed").length,
+  })).filter(s => s.total > 0);
+
   const submit = async () => {
-    if (!form.title||!form.asset) { setError(t(lang,"title")); return; }
+    if (!form.title || !form.asset) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
     const vendorName = form.vendor === "— None —" || !form.vendor ? null : form.vendor;
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName };
+    const found = assets.find(a => a.name === form.asset);
+    const record = { id: uid("WO"), title: form.title, asset: form.asset, category: form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
     if (err) { setError(err.message); } else {
       onAdd(record);
@@ -1156,7 +1209,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
         const { data: vd } = await supabase.from("vendors").select("id, open_orders").eq("name", vendorName).single();
         if (vd) await supabase.from("vendors").update({ open_orders: (vd.open_orders||0)+1 }).eq("id", vd.id);
       }
-      setForm({ title: "", asset: "", priority: "Medium", start_date: "", due: "", vendor: "" });
+      setForm({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "" });
       setShowForm(false);
     }
     setSaving(false);
@@ -1177,29 +1230,100 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
     if (val === "Completed" && wo?.status !== "Completed" && wo?.asset) {
       const { data: assetData } = await supabase.from("assets").select("id").eq("name", wo.asset).single();
       if (assetData) {
-        await supabase.from("maintenance_logs").insert([{ id: uid("LOG"), asset_id: assetData.id, asset_name: wo.asset, log_type: wo.title.startsWith("PM -") ? "Preventive Maintenance" : "Corrective Repair", title: wo.title, description: `Work order completed.\nVendor: ${wo.vendor||"—"}\nPriority: ${wo.priority}`, performed_by: wo.assignee||"—", vendor: wo.vendor||null, start_date: wo.start_date||TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: null, downtime_end: null, downtime_hours: null }]);
+        await supabase.from("maintenance_logs").insert([{ id: uid("LOG"), asset_id: assetData.id, asset_name: wo.asset, log_type: wo.title.startsWith("PM -") ? "Preventive Maintenance" : "Corrective Repair", title: wo.title, description: `Work order completed.\nCategory: ${wo.category||"—"}\nVendor: ${wo.vendor||"—"}\nPriority: ${wo.priority}`, performed_by: wo.assignee||"—", vendor: wo.vendor||null, start_date: wo.start_date||TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: null, downtime_end: null, downtime_hours: null }]);
       }
     }
   };
 
-  const updatePriority = async (id,val) => { await supabase.from("work_orders").update({ priority: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,priority:val}:wo)); };
+  const updatePriority = async (id, val) => { await supabase.from("work_orders").update({ priority: val }).eq("id",id); setWorkOrders(prev => prev.map(wo => wo.id===id?{...wo,priority:val}:wo)); };
   const saveEdit = async (updated) => { const { error: err } = await supabase.from("work_orders").update(updated).eq("id",updated.id); if (!err) { setWorkOrders(prev => prev.map(wo => wo.id===updated.id?updated:wo)); setEditItem(null); } else setError(err.message); };
   const confirmDelete = async () => { await supabase.from("work_orders").delete().eq("id",deleteItem.id); setWorkOrders(prev => prev.filter(wo => wo.id!==deleteItem.id)); setDeleteItem(null); };
 
-  const filterLabels = { All: t(lang,"all"), Open: t(lang,"open"), "In Progress": "In Progress", Pending: "Pending", Completed: t(lang,"completed") };
+  const WOTable = ({ wos }) => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+        <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+          {[t(lang,"id"),t(lang,"title"),t(lang,"asset"),t(lang,"category"),t(lang,"priority"),t(lang,"status"),t(lang,"vendor"),t(lang,"due"),t(lang,"photos"),...(isAdmin?[t(lang,"actions")]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {wos.map((wo,i) => (
+            <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+              <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
+              <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
+              <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
+              <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{CATEGORY_ICONS[wo.category]||"🔧"} {wo.category||"—"}</td>
+              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
+              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={["Open","In Progress","Pending","Completed"]} onChange={val => updateStatus(wo.id,val)} /></td>
+              <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor||"—"}</td>
+              <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>{wo.due||"—"}</td>
+              <td style={{ padding: "10px 12px" }}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Btn small onClick={() => setSelectedWO(wo)} color={C.purple}>📷</Btn>
+                  {isAdmin && <><Btn small onClick={() => setEditItem(wo)} color={C.blue}>{t(lang,"edit")}</Btn><Btn small variant="danger" onClick={() => setDeleteItem(wo)}>{t(lang,"del")}</Btn></>}
+                </div>
+              </td>
+            </tr>
+          ))}
+          {wos.length===0 && <tr><td colSpan={isAdmin?10:9} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>{t(lang,"noWorkOrdersForSite")}</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
     <div>
       {selectedWO && <WorkOrderPhotosModal workOrder={selectedWO} lang={lang} onClose={() => setSelectedWO(null)} />}
-      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:["Open","In Progress","Pending","Completed"]},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:SITES},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:["Open","In Progress","Pending","Completed"]},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
+
+      {/* Per-Site KPIs */}
+      {siteKPIs.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 12 }}>{t(lang,"siteKPIs")}</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {siteKPIs.map(s => (
+              <div key={s.site} onClick={() => setSiteFilter(s.site)} style={{ background: siteFilter===s.site?C.accent+"22":C.card, border: `1px solid ${siteFilter===s.site?C.accent:C.border}`, borderRadius: 10, padding: "12px 16px", cursor: "pointer", minWidth: 130 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: siteFilter===s.site?C.accent:C.text, marginBottom: 6 }}>{s.site}</div>
+                <div style={{ display: "flex", gap: 10, fontSize: 12 }}>
+                  <span style={{ color: C.accent }}>{s.open} {t(lang,"open")}</span>
+                  {s.overdue > 0 && <span style={{ color: C.red }}>⚠️ {s.overdue}</span>}
+                  {s.inProgress > 0 && <span style={{ color: C.blue }}>{s.inProgress} WIP</span>}
+                </div>
+              </div>
+            ))}
+            {siteFilter !== "All" && (
+              <div onClick={() => setSiteFilter("All")} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", cursor: "pointer", display: "flex", alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: C.muted }}>✕ {t(lang,"all")}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {["All","Open","In Progress","Pending","Completed"].map(s => <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{filterLabels[s]||s}</button>)}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+            <option value="All">{t(lang,"all")} Sites</option>
+            {SITES.filter(s => s !== "— Select Site —").map(s => <option key={s}>{s}</option>)}
+          </select>
+          <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+            <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
+            {WO_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+            <option value="Active">Active</option>
+            <option value="All">{t(lang,"all")}</option>
+            <option value="Open">{t(lang,"open")}</option>
+            <option value="In Progress">In Progress</option>
+            <option value="Pending">Pending</option>
+          </select>
         </div>
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newWorkOrder")}</Btn>
       </div>
+
+      {/* New WO Form */}
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"newWorkOrder")}</div>
@@ -1207,11 +1331,13 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
             <Input label={t(lang,"title")} value={form.title} onChange={f("title")} />
             <div>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"asset")}</div>
-              <select value={form.asset} onChange={e => f("asset")(e.target.value)} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
+              <select value={form.asset} onChange={e => handleAssetSelect(e.target.value)} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
                 <option value="">{t(lang,"selectAsset")}</option>
                 {(assets||[]).map(a => <option key={a.id} value={a.name}>{a.name} ({a.location})</option>)}
               </select>
             </div>
+            <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
+            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={SITES} />
             <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
             <Input label={t(lang,"dueDate")} value={form.due} onChange={f("due")} type="date" />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
@@ -1223,34 +1349,51 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, vendor
           </div>
         </div>
       )}
+
+      {/* Active Work Orders grouped by site */}
       {loading ? <Spinner lang={lang} /> : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
-            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {[t(lang,"id"),t(lang,"title"),t(lang,"asset"),t(lang,"priority"),t(lang,"status"),t(lang,"vendor"),t(lang,"start"),t(lang,"due"),t(lang,"photos"),...(isAdmin?[t(lang,"actions")]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>{h}</th>)}
-            </tr></thead>
-            <tbody>
-              {filtered.map((wo,i) => (
-                <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
-                  <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
-                  <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
-                  <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
-                  <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={["Open","In Progress","Pending","Completed"]} onChange={val => updateStatus(wo.id,val)} /></td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor||"—"}</td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.start_date||"—"}</td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>{wo.due||"—"}</td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Btn small onClick={() => setSelectedWO(wo)} color={C.purple}>📷</Btn>
-                      {isAdmin && <><Btn small onClick={() => setEditItem(wo)} color={C.blue}>{t(lang,"edit")}</Btn><Btn small variant="danger" onClick={() => setDeleteItem(wo)}>{t(lang,"del")}</Btn></>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filtered.length===0 && <tr><td colSpan={isAdmin?10:9} style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>{t(lang,"noWorkOrdersFound")}</td></tr>}
-            </tbody>
-          </table>
+        <div>
+          {Object.entries(activeGroups).map(([site, wos]) => wos.length === 0 ? null : (
+            <div key={site} style={{ marginBottom: 28 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>📍 {site}</div>
+                <div style={{ fontSize: 12, color: C.muted }}>{wos.length} {t(lang,"workOrders")}</div>
+                {wos.filter(w => w.due && w.due <= TODAY).length > 0 && (
+                  <Badge label={`⚠️ ${wos.filter(w => w.due && w.due <= TODAY).length} overdue`} color={C.red} />
+                )}
+              </div>
+              <WOTable wos={wos} />
+            </div>
+          ))}
+          {Object.values(activeGroups).every(g => g.length === 0) && (
+            <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noWorkOrdersFound")}</div>
+          )}
+
+          {/* Archived Section */}
+          <div style={{ marginTop: 24, borderTop: `1px solid ${C.border}`, paddingTop: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.muted }}>📦 {t(lang,"archived")}</div>
+                <Badge label={`${archivedWOs.length}`} color={C.muted} />
+              </div>
+              <button onClick={() => setShowArchived(v => !v)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>
+                {showArchived ? t(lang,"hideArchived") : t(lang,"showArchived")}
+              </button>
+            </div>
+            {showArchived && (
+              <div>
+                {Object.entries(archivedGroups).map(([site, wos]) => wos.length === 0 ? null : (
+                  <div key={site} style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.muted, marginBottom: 10 }}>📍 {site}</div>
+                    <WOTable wos={wos} />
+                  </div>
+                ))}
+                {Object.values(archivedGroups).every(g => g.length === 0) && (
+                  <div style={{ textAlign: "center", padding: 20, color: C.muted, fontSize: 13 }}>{t(lang,"noWorkOrdersFound")}</div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
