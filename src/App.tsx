@@ -1123,7 +1123,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                         </div>
                         {/* Approval section */}
                         {log.approval_status === "Pending" && isSupervisor && (
-                          <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={(updated) => setLogs(prev => prev.map(l => l.id===updated.id?updated:l))} onRejected={(updated) => setLogs(prev => prev.map(l => l.id===updated.id?updated:l))} />
+                          <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={(updated) => { setLogs(prev => prev.map(l => l.id===updated.id?updated:l)); loadLogs(); }} onRejected={(updated) => { setLogs(prev => prev.map(l => l.id===updated.id?updated:l)); loadLogs(); }} />
                         )}
                         {log.approval_status === "Approved" && log.approved_by && (
                           <div style={{ marginTop: 12, background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.green }}>
