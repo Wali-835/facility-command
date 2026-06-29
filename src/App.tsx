@@ -42,8 +42,11 @@ const fmt = (n) => n ? `$${Number(n).toLocaleString()}` : "—";
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
 const fmtDateTime = (d) => {
   if (!d) return "—";
-  const date = new Date(d.endsWith("Z") ? d : d + "Z");
-  return date.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" });
+  try {
+    const date = new Date(d.endsWith("Z") ? d : d + "Z");
+    if (isNaN(date.getTime())) return "—";
+    return date.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" });
+  } catch { return "—"; }
 };
 const minutesBetween = (a, b) => {
   if (!a || !b) return null;
@@ -1124,7 +1127,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                         )}
                         {log.approval_status === "Approved" && log.approved_by && (
                           <div style={{ marginTop: 12, background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.green }}>
-                            ✅ {t(lang,"approvedBy")} <strong>{log.approved_by}</strong> · {fmtDateTime(log.approved_at)}
+                            ✅ {t(lang,"approvedBy")} <strong>{log.approved_by}</strong> · {log.approved_at ? fmtDateTime(log.approved_at) : ""}
                           </div>
                         )}
                         {log.approval_status === "Rejected" && log.rejection_notes && (
@@ -1330,6 +1333,8 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
       setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] }));
       setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
       setShowPartForm(null);
+      // Also update log cost total
+      setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) + (qty*unitCost) } : l));
     }
     setSaving(false);
   };
@@ -1490,7 +1495,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
                       )}
                       {log.approval_status==="Approved" && log.approved_by && (
                         <div style={{ marginTop: 12, background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.green }}>
-                          ✅ {t(lang,"approvedBy")} <strong>{log.approved_by}</strong> · {fmtDateTime(log.approved_at)}
+                          ✅ {t(lang,"approvedBy")} <strong>{log.approved_by}</strong> · {log.approved_at ? fmtDateTime(log.approved_at) : ""}
                         </div>
                       )}
                       {log.approval_status==="Rejected" && log.rejection_notes && (
