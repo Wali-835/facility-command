@@ -910,8 +910,16 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   useEffect(() => { loadCatalog(); }, [asset.id]);
 
   const loadCatalog = async () => {
-    const { data } = await supabase.from("asset_parts").select("*").eq("asset_id", asset.id).order("part_name");
-    setCatalogParts(data || []);
+    const [assetPartsRes, modelPartsRes] = await Promise.all([
+      supabase.from("asset_parts").select("*").eq("asset_id", asset.id).order("part_name"),
+      asset.model ? supabase.from("model_parts").select("*").eq("model", asset.model).order("part_name") : Promise.resolve({ data: [] }),
+    ]);
+    const assetParts = assetPartsRes.data || [];
+    const modelParts = (modelPartsRes.data || []).map(p => ({ ...p, id: `mdl-${p.id}`, asset_part_id: p.id, isModelLevel: true }));
+    // Merge — asset-specific parts take priority
+    const merged = [...assetParts];
+    modelParts.forEach(mp => { if (!merged.find(ap => ap.part_name === mp.part_name)) merged.push(mp); });
+    setCatalogParts(merged);
   };
 
   const saveCatalogPart = async () => {
@@ -2397,7 +2405,192 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
     </div>
   );
 }
+function PartsCatalogMgmt({ lang }) {
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState(null);
+  const [parts, setParts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ part_name: "", part_number: "", supplier: "", unit_cost: "", notes: "" });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
+  useEffect(() => {
+    supabase.from("mhe_models").select("id, brand, model, category, subcategory").order("brand").order("model")
+      .then(({ data }) => setModels(data || []));
+  }, []);
+
+  useEffect(() => {
+    if (selectedModel) loadParts();
+    else setParts([]);
+  }, [selectedModel]);
+
+  const loadParts = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("model_parts").select("*").eq("model_id", selectedModel.id).order("part_name");
+    setParts(data || []);
+    setLoading(false);
+  };
+
+  const savePart = async () => {
+    if (!form.part_name || !selectedModel) return;
+    setSaving(true);
+    const record = { id: uid("MPT"), model_id: selectedModel.id, model: selectedModel.model, brand: selectedModel.brand, part_name: form.part_name, part_number: form.part_number||null, supplier: form.supplier||null, unit_cost: parseFloat(form.unit_cost)||0, notes: form.notes||null };
+    const { error: err } = await supabase.from("model_parts").insert([record]);
+    if (err) { setError(err.message); } else { setParts(prev => [...prev, record]); setForm({ part_name: "", part_number: "", supplier: "", unit_cost: "", notes: "" }); setShowForm(false); setSuccess("Part added!"); }
+    setSaving(false);
+  };
+
+  const deletePart = async (id) => {
+    await supabase.from("model_parts").delete().eq("id", id);
+    setParts(prev => prev.filter(p => p.id !== id));
+  };
+
+  const handleImport = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setImporting(true); setError(null);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        const records = [];
+        for (const row of data) {
+          const modelName = row["Model"] || row["model"] || "";
+          const brand = row["Brand"] || row["brand"] || "";
+          if (!modelName || !row["Part Name"]) continue;
+          // Find model in DB
+          const found = models.find(m => m.model.toLowerCase() === modelName.toLowerCase());
+          if (!found) continue;
+          records.push({ id: uid("MPT"), model_id: found.id, model: found.model, brand: found.brand || brand, part_name: row["Part Name"] || "", part_number: row["Part Number"] || null, supplier: row["Supplier"] || null, unit_cost: parseFloat(row["Unit Cost"]) || 0, notes: row["Notes"] || null });
+        }
+        if (records.length === 0) { setError("No valid rows found. Check column names."); setImporting(false); return; }
+        const { error: err } = await supabase.from("model_parts").insert(records);
+        if (err) { setError(err.message); } else { setSuccess(`${t(lang,"partImported")} (${records.length} parts)`); if (selectedModel) loadParts(); }
+      } catch { setError("Failed to parse file."); }
+      setImporting(false);
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  // Group models by brand
+  const brandGroups = models.reduce((acc, m) => {
+    if (!acc[m.brand]) acc[m.brand] = [];
+    acc[m.brand].push(m);
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>🔩 {t(lang,"partsCatalogMgmt")}</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: importing?"not-allowed":"pointer", opacity: importing?0.7:1 }}>
+            {importing ? t(lang,"importing") : `📥 ${t(lang,"importPartsExcel")}`}
+            <input type="file" accept=".xlsx,.xls" onChange={handleImport} style={{ display: "none" }} disabled={importing} />
+          </label>
+        </div>
+      </div>
+
+      {/* Excel format hint */}
+      <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.blue, marginBottom: 20 }}>
+        📋 {t(lang,"excelFormat")}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20, alignItems: "start" }}>
+        {/* Model List */}
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700, color: C.text }}>📦 {t(lang,"selectModel")}</div>
+          <div style={{ maxHeight: 600, overflowY: "auto" }}>
+            {Object.entries(brandGroups).map(([brand, brandModels]) => (
+              <div key={brand}>
+                <div style={{ padding: "8px 16px", fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", background: C.surface, letterSpacing: "0.07em" }}>{brand}</div>
+                {brandModels.map(m => {
+                  const isSelected = selectedModel?.id === m.id;
+                  return (
+                    <div key={m.id} onClick={() => setSelectedModel(m)} style={{ padding: "10px 16px", cursor: "pointer", background: isSelected?C.accent+"22":"transparent", borderLeft: `3px solid ${isSelected?C.accent:"transparent"}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: isSelected?700:400, color: isSelected?C.accent:C.text }}>{m.model}</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>{m.subcategory || m.category}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Parts Panel */}
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+          {!selectedModel ? (
+            <div style={{ textAlign: "center", padding: 60, color: C.muted, fontSize: 13 }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🔩</div>
+              {t(lang,"noModelSelected")}
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{selectedModel.brand} {selectedModel.model}</div>
+                  <div style={{ fontSize: 12, color: C.muted }}>{selectedModel.subcategory} · {parts.length} {t(lang,"partsCount")}</div>
+                </div>
+                <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addPartToModel")}</Btn>
+              </div>
+
+              {showForm && (
+                <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                    <Input label={t(lang,"partName")} value={form.part_name} onChange={f("part_name")} />
+                    <Input label={t(lang,"partNumber")} value={form.part_number} onChange={f("part_number")} />
+                    <Input label={t(lang,"supplier")} value={form.supplier} onChange={f("supplier")} />
+                    <Input label={t(lang,"unitCostLabel")} value={form.unit_cost} onChange={f("unit_cost")} type="number" />
+                    <Input label={t(lang,"descriptionNotes")} value={form.notes} onChange={f("notes")} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <Btn onClick={savePart} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
+                    <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+                  </div>
+                </div>
+              )}
+
+              {loading ? <Spinner lang={lang} /> : parts.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noPartsInCatalog")}</div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {[t(lang,"partName"),t(lang,"partNumber"),t(lang,"unitCostLabel"),t(lang,"supplier"),t(lang,"descriptionNotes"),""].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {parts.map((part, i) => (
+                        <tr key={part.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                          <td style={{ padding: "10px 12px", color: C.text, fontWeight: 600 }}>{part.part_name}</td>
+                          <td style={{ padding: "10px 12px", color: C.subtle, fontFamily: "monospace", fontSize: 11 }}>{part.part_number||"—"}</td>
+                          <td style={{ padding: "10px 12px", color: C.accent, fontWeight: 700 }}>{part.unit_cost?`$${part.unit_cost}`:"—"}</td>
+                          <td style={{ padding: "10px 12px", color: C.subtle }}>{part.supplier||"—"}</td>
+                          <td style={{ padding: "10px 12px", color: C.muted, fontSize: 12 }}>{part.notes||"—"}</td>
+                          <td style={{ padding: "10px 12px" }}><Btn small variant="danger" onClick={() => deletePart(part.id)}>{t(lang,"del")}</Btn></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 function UserManagement({ lang }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "" });
@@ -2535,7 +2728,7 @@ export default function App() {
     t(lang,"overview"),
     t(lang,"breakdownsAndIssues"),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
-    ...(isAdmin ? [t(lang,"users")] : []),
+    ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users")] : []),
   ];
   const activeTab = tab || tabs[0];
 
@@ -2574,6 +2767,7 @@ export default function App() {
         {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} />}
         {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
+        {activeTab===t(lang,"partsCatalogMgmt") && isAdmin && <PartsCatalogMgmt lang={lang} />}
         {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} />}
       </div>
     </div>
