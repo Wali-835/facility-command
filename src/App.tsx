@@ -1020,46 +1020,6 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
             <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
               <div style={{ fontSize: 12, color: C.muted, padding: "8px 0" }}>📋 {t(lang,"maintenanceHistory")} — {t(lang,"readOnly")}</div>
             </div>
-                {catalogParts.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: 20, color: C.muted, fontSize: 13 }}>{t(lang,"noPartsInCatalog")}</div>
-                ) : (
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                      <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                        {[t(lang,"partName"),t(lang,"partNumber"),t(lang,"unitCostLabel"),t(lang,"currentStock"),t(lang,"minStockLevel"),t(lang,"supplier"),...(isAdmin?[""]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>)}
-                      </tr></thead>
-                      <tbody>
-                        {catalogParts.map(part => {
-                          const isLow = part.stock_quantity <= part.min_stock_level;
-                          const isOut = part.stock_quantity === 0;
-                          return (
-                            <tr key={part.id} style={{ borderBottom: `1px solid ${C.border}22`, background: isOut?C.red+"11":isLow?C.yellow+"11":"transparent" }}>
-                              <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{part.part_name}</td>
-                              <td style={{ padding: "8px 10px", color: C.subtle, fontFamily: "monospace", fontSize: 11 }}>{part.part_number||"—"}</td>
-                              <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>${part.unit_cost||0}</td>
-                              <td style={{ padding: "8px 10px" }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  {isAdmin ? (
-                                    <input type="number" value={part.stock_quantity} onChange={e => updateStock(part.id, parseFloat(e.target.value)||0)} style={{ width: 60, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 6px", color: C.text, fontSize: 12 }} />
-                                  ) : (
-                                    <span style={{ color: isOut?C.red:isLow?C.yellow:C.green, fontWeight: 700 }}>{part.stock_quantity}</span>
-                                  )}
-                                  {isOut && <span style={{ fontSize: 10, color: C.red, fontWeight: 700 }}>{t(lang,"outOfStock")}</span>}
-                                  {isLow && !isOut && <span style={{ fontSize: 10, color: C.yellow, fontWeight: 700 }}>{t(lang,"lowStock")}</span>}
-                                </div>
-                              </td>
-                              <td style={{ padding: "8px 10px", color: C.muted }}>{part.min_stock_level}</td>
-                              <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
-                              {isAdmin && <td style={{ padding: "8px 10px" }}><Btn small variant="danger" onClick={() => deleteCatalogPart(part.id)}>{t(lang,"del")}</Btn></td>}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>{t(lang,"maintenanceHistory")}</div>
             {loadingLogs ? <Spinner lang={lang} /> : logs.length===0 ? (
               <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noMaintenanceRecords")}</div>
