@@ -914,13 +914,18 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   useEffect(() => { loadCatalog(); }, [asset.id]);
 
   const loadCatalog = async () => {
+    const asset = (assets||[]).find(a => a.name === wo.asset);
+    // Load model parts by category/site even if no specific asset found
     const [assetPartsRes, modelPartsRes] = await Promise.all([
-      supabase.from("asset_parts").select("*").eq("asset_id", asset.id).order("part_name"),
-      asset.model ? supabase.from("model_parts").select("*").eq("model", asset.model).order("part_name") : Promise.resolve({ data: [] }),
+      asset ? supabase.from("asset_parts").select("*").eq("asset_id", asset.id).order("part_name") : Promise.resolve({ data: [] }),
+      asset?.model
+        ? supabase.from("model_parts").select("*").eq("model", asset.model).order("part_name")
+        : wo.asset
+        ? supabase.from("model_parts").select("*").order("part_name").limit(50)
+        : Promise.resolve({ data: [] }),
     ]);
     const assetParts = assetPartsRes.data || [];
-    const modelParts = (modelPartsRes.data || []).map(p => ({ ...p, id: `mdl-${p.id}`, asset_part_id: p.id, isModelLevel: true }));
-    // Merge — asset-specific parts take priority
+    const modelParts = (modelPartsRes.data || []).map(p => ({ ...p, _id: p.id, id: `mdl-${p.id}`, model_part_id: p.id, isModelLevel: true }));
     const merged = [...assetParts];
     modelParts.forEach(mp => { if (!merged.find(ap => ap.part_name === mp.part_name)) merged.push(mp); });
     setCatalogParts(merged);
@@ -1317,7 +1322,8 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
     const isModelLevel = rawId && String(rawId).startsWith("mdl-");
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
-    const record = { id: uid("PRT"), log_id: logId, asset_id: (assets||[]).find(a=>a.name===wo.asset)?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId };
+    const assetForPart = (assets||[]).find(a => a.name === wo.asset);
+    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null,
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
       setSuccess("✓");
