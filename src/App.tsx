@@ -43,7 +43,9 @@ const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
 const fmtDateTime = (d) => {
   if (!d) return "—";
   try {
-    const date = new Date(d.endsWith("Z") ? d : d + "Z");
+    // Handle formats: with Z, with +03, with space instead of T
+    const normalized = d.replace(" ", "T");
+    const date = new Date(normalized);
     if (isNaN(date.getTime())) return "—";
     return date.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" });
   } catch { return "—"; }
