@@ -1323,7 +1323,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
     const assetForPart = (assets||[]).find(a => a.name === wo.asset);
-    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null,
+    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
       setSuccess("✓");
