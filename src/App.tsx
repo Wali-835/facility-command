@@ -1014,65 +1014,8 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
             <ErrBanner msg={error} onDismiss={() => setError(null)} />
             <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
             <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-              <button onClick={() => setShowChecklist(true)} style={{ background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{t(lang,"runCILChecklist")}</button>
-              <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addMaintenanceLog")}</Btn>
-              {isAdmin && <button onClick={() => setShowCatalog(v => !v)} style={{ background: C.purple+"22", color: C.purple, border: `1px solid ${C.purple}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>🔩 {t(lang,"partsCatalog")}</button>}
+              <div style={{ fontSize: 12, color: C.muted, padding: "8px 0" }}>📋 {t(lang,"maintenanceHistory")} — {t(lang,"readOnly")}</div>
             </div>
-            {showForm && (
-              <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
-                <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"newMaintenanceLog")}</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-                  <Sel label={t(lang,"type")} value={form.log_type} onChange={f("log_type")} options={LOG_TYPES} />
-                  <Input label={t(lang,"title")} value={form.title} onChange={f("title")} />
-                  <Input label={t(lang,"performedBy")} value={form.performed_by} onChange={f("performed_by")} />
-                  <Sel label={t(lang,"vendor")} value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
-                  <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
-                  <Input label={t(lang,"endDate")} value={form.end_date} onChange={f("end_date")} type="date" />
-                  <Input label={t(lang,"totalCost")} value={form.cost} onChange={f("cost")} type="number" />
-                  <Sel label={t(lang,"status")} value={form.status} onChange={f("status")} options={LOG_STATUSES} />
-                  <Input label={t(lang,"downtimeStart")} value={form.downtime_start} onChange={f("downtime_start")} type="date" />
-                  <Input label={t(lang,"backToOperationLabel")} value={form.downtime_end} onChange={f("downtime_end")} type="date" />
-                </div>
-                <div style={{ marginTop: 12 }}><Textarea label={t(lang,"descriptionNotes")} value={form.description} onChange={f("description")} /></div>
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <Btn onClick={submitLog} disabled={saving}>{saving?t(lang,"saving"):t(lang,"saveLog")}</Btn>
-                  <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
-                </div>
-              </div>
-            )}
-            {/* Parts Catalog */}
-            {showCatalog && (
-              <div style={{ background: C.surface, border: `1px solid ${C.purple}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.purple }}>🔩 {t(lang,"partsCatalog")}</div>
-                  {isAdmin && <Btn small onClick={() => setShowCatalogForm(v => !v)}>{t(lang,"addPartToCatalog")}</Btn>}
-                </div>
-                {showCatalogForm && (
-                  <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
-                    <div style={{ marginBottom: 10 }}>
-                                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>{t(lang,"selectFromCatalog")}</div>
-                                <select onChange={e => {
-                                  const found = catalogParts.find(p => p.id === e.target.value);
-                                  if (found) { setPartForm({ part_name: found.part_name, part_number: found.part_number||"", quantity: "1", unit_cost: String(found.unit_cost||""), supplier: found.supplier||"", asset_part_id: found.id }); }
-                                }} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px", color: C.text, fontSize: 13 }}>
-                                  <option value="">{t(lang,"selectFromCatalog")}</option>
-                                  {catalogParts.map(p => <option key={p.id} value={p.id}>{p.part_name} {p.part_number?`(${p.part_number})`:""} — ${p.unit_cost} {p.stock_quantity<=p.min_stock_level?`⚠️ ${p.stock_quantity} left`:""}</option>)}
-                                </select>
-                              </div>
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
-                                <Input label={t(lang,"partName")} value={partForm.part_name} onChange={pf("part_name")} />
-                                <Input label={t(lang,"partNumber")} value={partForm.part_number} onChange={pf("part_number")} />
-                                <Input label={t(lang,"quantity")} value={partForm.quantity} onChange={pf("quantity")} type="number" />
-                                <Input label={t(lang,"unitCost")} value={partForm.unit_cost} onChange={pf("unit_cost")} type="number" />
-                                <Input label={t(lang,"supplier")} value={partForm.supplier} onChange={pf("supplier")} />
-                              </div>
-                    <div style={{ marginTop: 10 }}><Input label={t(lang,"descriptionNotes")} value={catalogForm.notes} onChange={cf("notes")} /></div>
-                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                      <Btn small onClick={saveCatalogPart}>{t(lang,"save")}</Btn>
-                      <Btn small variant="secondary" onClick={() => setShowCatalogForm(false)}>{t(lang,"cancel")}</Btn>
-                    </div>
-                  </div>
-                )}
                 {catalogParts.length === 0 ? (
                   <div style={{ textAlign: "center", padding: 20, color: C.muted, fontSize: 13 }}>{t(lang,"noPartsInCatalog")}</div>
                 ) : (
@@ -1149,7 +1092,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                         <div style={{ marginTop: 14 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{t(lang,"spareParts")}</div>
-                            {(isAdmin || isSupervisor || userRole?.role === "maintenance") && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>{t(lang,"addPart")}</Btn>}
+                            {isSupervisor && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>{t(lang,"addPart")}</Btn>}
                           </div>
                           {showPartForm===log.id && (
                             <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
