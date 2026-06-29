@@ -980,7 +980,11 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
     setSaving(true); setError(null);
     const qty = parseFloat(partForm.quantity)||1;
     const unitCost = parseFloat(partForm.unit_cost)||0;
-    const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier, asset_part_id: partForm.asset_part_id||null };
+    // Clean asset_part_id — strip mdl- prefix for model-level parts since they don't exist in asset_parts
+    const rawPartId = partForm.asset_part_id;
+    const isModelLevel = rawPartId && String(rawPartId).startsWith("mdl-");
+    const cleanPartId = isModelLevel ? null : rawPartId || null;
+    const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanPartId };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else { setSuccess("✓"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null }); setShowPartForm(null); }
     setSaving(false);
