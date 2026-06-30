@@ -2252,7 +2252,14 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang }) {
 function LowStockAlerts({ lang, isSupervisor }) {
   const [alerts, setAlerts] = useState([]);
   useEffect(() => {
-    supabase.from("asset_parts").select("*, assets(name)").filter("stock_quantity", "lte", "min_stock_level").then(({ data }) => setAlerts(data||[]));
+    Promise.all([
+      supabase.from("asset_parts").select("*, assets(name)"),
+      supabase.from("model_parts").select("*"),
+    ]).then(([apRes, mpRes]) => {
+      const ap = (apRes.data||[]).filter(p => (p.stock_quantity||0) <= (p.min_stock_level||1)).map(p => ({ ...p, source: "asset" }));
+      const mp = (mpRes.data||[]).filter(p => (p.stock_quantity||0) <= (p.min_stock_level||1)).map(p => ({ ...p, asset_name: p.model, source: "model" }));
+      setAlerts([...ap,...mp]);
+    });
   }, []);
   if (!alerts.length || !isSupervisor) return null;
   return (
