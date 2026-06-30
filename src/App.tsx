@@ -848,8 +848,9 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
 
   const approve = async () => {
     setSaving(true);
-    const now = new Date().toISOString();
-    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name || "", approved_at: now, status: "Completed" }).eq("id", log.id);
+    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name || "", approved_at: new Date().toISOString(), status: "Completed" }).eq("id", log.id);
+    // Re-fetch the log to get server timestamp
+    const { data: updated } = await supabase.from("maintenance_logs").select("*").eq("id", log.id).single();
     // Deduct stock for parts used
     const { data: parts } = await supabase.from("spare_parts").select("*").eq("log_id", log.id);
     if (parts?.length) {
@@ -866,7 +867,7 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
         }
       }
     }
-    onApproved({ ...log, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, status: "Completed" });
+    onApproved(updated || { ...log, approval_status: "Approved", approved_by: userRole?.name, status: "Completed" });
     setSaving(false);
   };
 
