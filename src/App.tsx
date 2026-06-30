@@ -2804,6 +2804,120 @@ function PartsCatalogMgmt({ lang }) {
     </div>
   );
 }
+function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedLog, setExpandedLog] = useState(null);
+  const [parts, setParts] = useState({});
+
+  useEffect(() => { loadPending(); }, []);
+
+  const loadPending = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("maintenance_logs").select("*").eq("approval_status", "Pending").order("start_date", { ascending: false });
+    setLogs(data || []);
+    setLoading(false);
+  };
+
+  const loadParts = async (logId) => {
+    const { data } = await supabase.from("spare_parts").select("*").eq("log_id", logId);
+    setParts(prev => ({ ...prev, [logId]: data || [] }));
+  };
+
+  const toggleLog = (logId) => {
+    setExpandedLog(expandedLog===logId?null:logId);
+    if (!parts[logId]) loadParts(logId);
+  };
+
+  // Determine scope
+  const supervisedSites = userRole.supervised_sites;
+  const supervisedCategories = userRole.supervised_categories;
+
+  const isInScope = (log) => {
+    if (isAdmin) return true;
+    const asset = (assets||[]).find(a => a.name === log.asset_name);
+    const site = asset?.location;
+    // We don't have category on the log directly, try to infer from related WO — fallback: in scope if no restriction set
+    const siteMatch = !supervisedSites?.length || (site && supervisedSites.includes(site));
+    return siteMatch; // category checked separately when available
+  };
+
+  const inScopeLogs = logs.filter(isInScope);
+  const outOfScopeLogs = logs.filter(l => !isInScope(l));
+
+  const LogCard = ({ log, dimmed }) => (
+    <div style={{ background: C.card, border: `1px solid ${dimmed?C.border:C.yellow+"44"}`, borderRadius: 10, overflow: "hidden", opacity: dimmed?0.6:1 }}>
+      <div onClick={() => toggleLog(log.id)} style={{ padding: "14px 18px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18 }}>{log.log_type==="Preventive Maintenance"?"🔧":log.log_type==="Corrective Repair"?"🔨":"🔍"}</span>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{log.title}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>{log.asset_name} · {fmtDate(log.start_date)} · {log.performed_by}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {dimmed && <Badge label={t(lang,"outOfScope")} color={C.muted} />}
+          <Badge label={t(lang,"pendingApproval")} color={C.yellow} />
+          {log.cost>0 && <span style={{ fontSize: 12, color: C.accent, fontWeight: 700 }}>${log.cost}</span>}
+          <span style={{ color: C.muted }}>{expandedLog===log.id?"▲":"▼"}</span>
+        </div>
+      </div>
+      {expandedLog===log.id && (
+        <div style={{ padding: "0 18px 18px", borderTop: `1px solid ${C.border}` }}>
+          {log.description && <div style={{ marginTop: 12, padding: 12, background: C.surface, borderRadius: 8, fontSize: 13, color: C.subtle, lineHeight: 1.6 }}>{log.description}</div>}
+          {parts[log.id]?.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>{t(lang,"spareParts")}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <tbody>
+                  {parts[log.id].map(p => (
+                    <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                      <td style={{ padding: "6px 8px", color: C.text }}>{p.part_name}</td>
+                      <td style={{ padding: "6px 8px", color: C.subtle }}>x{p.quantity}</td>
+                      <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 700 }}>${p.total_cost||0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {(isAdmin || !dimmed) && (
+            <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={() => setLogs(prev => prev.filter(l => l.id!==log.id))} onRejected={() => setLogs(prev => prev.filter(l => l.id!==log.id))} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>⏳ {t(lang,"pendingApprovalsSection")}</div>
+        <button onClick={loadPending} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↻ {t(lang,"refresh")}</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
+        <StatCard icon="⏳" label={t(lang,"pendingApprovalsSection")} value={logs.length} color={C.yellow} />
+        <StatCard icon="📍" label={t(lang,"supervisedSites")} value={supervisedSites?.length || t(lang,"allSitesScope")} color={C.blue} />
+        <StatCard icon="🔧" label={t(lang,"supervisedCategories")} value={supervisedCategories?.length || t(lang,"allCategoriesScope")} color={C.purple} />
+      </div>
+
+      {loading ? <Spinner lang={lang} /> : logs.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noPendingApprovals")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {inScopeLogs.map(log => <LogCard key={log.id} log={log} dimmed={false} />)}
+          {outOfScopeLogs.length > 0 && (
+            <>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 10, marginBottom: 4, textTransform: "uppercase" }}>{t(lang,"outOfScope")}</div>
+              {outOfScopeLogs.map(log => <LogCard key={log.id} log={log} dimmed={true} />)}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 function UserManagement({ lang }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
@@ -2980,8 +3094,10 @@ export default function App() {
   const tabs = [
     t(lang,"overview"),
     t(lang,"breakdownsAndIssues"),
+    ...(isSupervisor ? [t(lang,"pendingApprovalsSection")] : []),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
     ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users")] : []),
+  ];
   ];
   const activeTab = tab || tabs[0];
 
@@ -3013,6 +3129,7 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} />}
+        {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} assets={assets} lang={lang} userRole={userRole} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} lang={lang} userRole={userRole} />}
