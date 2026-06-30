@@ -2806,7 +2806,7 @@ function PartsCatalogMgmt({ lang }) {
 }
 function UserManagement({ lang }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
-  const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "" });
+  const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
   useEffect(() => { loadUsers(); }, []);
@@ -2814,9 +2814,9 @@ function UserManagement({ lang }) {
   const submit = async () => {
     if (!form.email||!form.name) { setError(t(lang,"email")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("USR"), email: form.email, name: form.name, role: form.role, site: form.site||null };
+    const record = { id: uid("USR"), email: form.email, name: form.name, role: form.role, site: form.site||null, supervised_sites: form.role==="supervisor" ? (form.supervised_sites.length?form.supervised_sites:null) : null, supervised_categories: form.role==="supervisor" ? (form.supervised_categories.length?form.supervised_categories:null) : null };
     const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
-    if (err) { setError(err.message); } else { setSuccess("✓"); setForm({ email: "", name: "", role: "operations", site: "" }); setShowForm(false); loadUsers(); }
+    if (err) { setError(err.message); } else { setSuccess("✓"); setForm({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] }); setShowForm(false); loadUsers(); }
     setSaving(false);
   };
   const deleteUser = async (id) => { await supabase.from("user_roles").delete().eq("id",id); setUsers(prev => prev.filter(u => u.id!==id)); };
@@ -2850,8 +2850,42 @@ function UserManagement({ lang }) {
             <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />
             <Input label={t(lang,"fullName")} value={form.name} onChange={f("name")} />
             <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","supervisor","admin"]} />
-            <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...SITES.filter(s => s!=="— Select Site —")]} />
+            <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...SITES.filter(s => s !== "— Select Site —")]} />
           </div>
+          {form.role === "supervisor" && (
+            <div style={{ marginTop: 14, background: C.surface, border: `1px solid ${C.purple}33`, borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 12, color: C.purple, fontWeight: 700, marginBottom: 4, textTransform: "uppercase" }}>{t(lang,"supervisedSites")} / {t(lang,"supervisedCategories")}</div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>{t(lang,"scopeNote")}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>{t(lang,"supervisedSites")}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 150, overflowY: "auto" }}>
+                    {SITES.filter(s => s !== "— Select Site —").map(s => (
+                      <label key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.subtle, cursor: "pointer" }}>
+                        <input type="checkbox" checked={form.supervised_sites.includes(s)} onChange={e => {
+                          setForm(p => ({ ...p, supervised_sites: e.target.checked ? [...p.supervised_sites, s] : p.supervised_sites.filter(x => x !== s) }));
+                        }} />
+                        {s}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>{t(lang,"supervisedCategories")}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 150, overflowY: "auto" }}>
+                    {["MHE","HVAC","Fire Alarm & Suppression","Electrical","Plumbing","Civil & Structural","Security Systems","Lighting","General Maintenance"].map(c => (
+                      <label key={c} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.subtle, cursor: "pointer" }}>
+                        <input type="checkbox" checked={form.supervised_categories.includes(c)} onChange={e => {
+                          setForm(p => ({ ...p, supervised_categories: e.target.checked ? [...p.supervised_categories, c] : p.supervised_categories.filter(x => x !== c) }));
+                        }} />
+                        {c}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"saveUser")}</Btn>
             <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
@@ -2866,7 +2900,13 @@ function UserManagement({ lang }) {
                 <div><div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.email}</div></div>
                 <span style={{ background: roleColor(u.role)+"22", color: roleColor(u.role), border: `1px solid ${roleColor(u.role)}44`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon(u.role)} {u.role}</span>
               </div>
-              {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>📍 {u.site}</div>}
+              {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>📍 {u.site}</div>}
+              {u.role === "supervisor" && (
+                <div style={{ fontSize: 11, color: C.purple, marginBottom: 12 }}>
+                  {u.supervised_sites?.length ? `🏭 ${u.supervised_sites.join(", ")}` : `🏭 ${t(lang,"allSitesScope")}`}<br/>
+                  {u.supervised_categories?.length ? `🔧 ${u.supervised_categories.join(", ")}` : `🔧 ${t(lang,"allCategoriesScope")}`}
+                </div>
+              )}
               <Btn small variant="danger" onClick={() => deleteUser(u.id)}>{t(lang,"remove")}</Btn>
             </div>
           ))}
