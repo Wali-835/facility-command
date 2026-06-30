@@ -1848,8 +1848,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
 function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
   const [form, setForm] = useState({ ...data });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+  const brands = [...new Set(mheModels.map(m => m.brand).filter(Boolean))];
+  const modelsForBrand = form.brand ? mheModels.filter(m => m.brand === form.brand) : mheModels;
 
- const handleModelSelect = (modelName) => {
+  const handleModelSelect = (modelName) => {
     f("model")(modelName);
     const found = mheModels.find(m => m.model === modelName);
     if (found) {
@@ -1862,6 +1864,7 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
       }));
     }
   };
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 620, maxHeight: "90vh", overflowY: "auto" }}>
@@ -1871,14 +1874,22 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
           <Input label={t(lang,"category")} value={form.category||""} onChange={f("category")} />
           <Sel label={t(lang,"site")} value={form.location||""} onChange={f("location")} options={SITES} />
           <Input label={t(lang,"owner")} value={form.owner||""} onChange={f("owner")} />
-          <Input label={t(lang,"brand")} value={form.brand||""} onChange={f("brand")} />
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"brand")}</div>
+            <input list="brands-edit" value={form.brand||""} onChange={e => f("brand")(e.target.value)}
+              placeholder="e.g. Jungheinrich"
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+            <datalist id="brands-edit">
+              {brands.map(b => <option key={b} value={b} />)}
+            </datalist>
+          </div>
           <div>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"model")}</div>
             <input list="mhe-models-edit" value={form.model||""} onChange={e => handleModelSelect(e.target.value)}
               placeholder="e.g. ETV 216"
               style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
             <datalist id="mhe-models-edit">
-              {mheModels.map(m => <option key={m.model} value={m.model} />)}
+              {modelsForBrand.map(m => <option key={m.model} value={m.model} />)}
             </datalist>
           </div>
           <Input label={t(lang,"serialNumber")} value={form.serial_number||""} onChange={f("serial_number")} />
@@ -1994,14 +2005,23 @@ const filtered = assets.filter(a =>
             <Sel label={t(lang,"site")} value={form.location} onChange={f("location")} options={SITES} />
             <Input label={t(lang,"owner")} value={form.owner} onChange={f("owner")} placeholder="e.g. EPx Logistics" />
             <div>
-  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"model")}</div>
-  <input list="mhe-models-list" value={form.model} onChange={e => handleModelSelect(e.target.value)}
-    placeholder="e.g. ETV 216"
-    style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
-  <datalist id="mhe-models-list">
-    {mheModels.map(m => <option key={m.model} value={m.model} />)}
-  </datalist>
-</div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"brand")}</div>
+            <input list="brands-list" value={form.brand} onChange={e => f("brand")(e.target.value)}
+              placeholder="e.g. Jungheinrich"
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+            <datalist id="brands-list">
+              {[...new Set(mheModels.map(m => m.brand).filter(Boolean))].map(b => <option key={b} value={b} />)}
+            </datalist>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"model")}</div>
+            <input list="mhe-models-list" value={form.model} onChange={e => handleModelSelect(e.target.value)}
+              placeholder="e.g. ETV 216"
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+            <datalist id="mhe-models-list">
+              {(form.brand ? mheModels.filter(m => m.brand === form.brand) : mheModels).map(m => <option key={m.model} value={m.model} />)}
+            </datalist>
+          </div>
             <Input label={t(lang,"serialNumber")} value={form.serial_number} onChange={f("serial_number")} />
             <Input label={t(lang,"manufactureDate")} value={form.manufacture_date} onChange={f("manufacture_date")} type="date" />
             <Input label={t(lang,"estValue")} value={form.value} onChange={f("value")} />
