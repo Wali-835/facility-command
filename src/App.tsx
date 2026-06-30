@@ -3098,7 +3098,6 @@ export default function App() {
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
     ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users")] : []),
   ];
-  ];
   const activeTab = tab || tabs[0];
 
   return (
