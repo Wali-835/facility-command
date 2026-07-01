@@ -359,23 +359,41 @@ export default function AssetPage() {
   };
 
   // ─── Resolve Breakdown ────────────────────────────────────────────────────
-  const [resolveForm, setResolveForm] = useState({ breakdown_id: "", notes: "", vendor: "" });
+  const [resolveForm, setResolveForm] = useState({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
   const rf = (k) => (v) => setResolveForm(p => ({ ...p, [k]: v }));
 
   const submitResolve = async () => {
     if (!resolveForm.notes || !resolveForm.breakdown_id) { setError("Please fill all fields."); return; }
     setSaving(true);
     const now = new Date().toISOString();
-    const brk = breakdowns.find(b => b.id === resolveForm.breakdown_id);
-    const mins = brk ? Math.round((new Date(now) - new Date(brk.downtime_start.endsWith("Z") ? brk.downtime_start : brk.downtime_start+"Z")) / (1000*60)) : null;
+    const downtimeStartTs = resolveForm.downtime_start;
+    const mins = downtimeStartTs ? Math.round((new Date(now) - new Date(downtimeStartTs.endsWith("Z") ? downtimeStartTs : downtimeStartTs+"Z")) / (1000*60)) : null;
+    const downtimeStartDate = downtimeStartTs ? downtimeStartTs.split("T")[0] : TODAY;
     await supabase.from("breakdown_reports").update({ status: "Resolved", resolved_by: userRole?.name, resolved_at: now, downtime_end: now, downtime_hours: mins, maintenance_notes: resolveForm.notes }).eq("id", resolveForm.breakdown_id);
     await supabase.from("assets").update({ status: "Operational" }).eq("id", asset.id);
-    await supabase.from("maintenance_logs").insert([{ id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Corrective Repair", title: `Breakdown Resolved`, description: `ISSUE: ${brk?.description}\n\nMAINTENANCE NOTES: ${resolveForm.notes}`, performed_by: userRole?.name, vendor: resolveForm.vendor==="— None —"?null:resolveForm.vendor||null, start_date: TODAY, end_date: TODAY, cost: null, status: "Completed", approval_status: isSupervisor ? "Approved" : "Pending" }]);
+    await supabase.from("maintenance_logs").insert([{
+      id: uid("LOG"), asset_id: asset.id, asset_name: asset.name,
+      log_type: "Corrective Repair",
+      title: `Breakdown Resolved — ${resolveForm.severity||""} severity`,
+      description: `BREAKDOWN REPORTED BY: ${resolveForm.reported_by||""}\n\nISSUE: ${resolveForm.description||""}\n\nMAINTENANCE NOTES: ${resolveForm.notes}`,
+      performed_by: userRole?.name,
+      vendor: resolveForm.vendor==="— None —"?null:resolveForm.vendor||null,
+      start_date: downtimeStartDate,
+      end_date: TODAY,
+      cost: null,
+      status: "Completed",
+      approval_status: isSupervisor ? "Approved" : "Pending",
+      approved_by: isSupervisor ? userRole?.name : null,
+      approved_at: isSupervisor ? new Date().toISOString() : null,
+      downtime_start: downtimeStartDate,
+      downtime_end: TODAY,
+      downtime_hours: mins,
+    }]);
     setAsset(prev => ({ ...prev, status: "Operational" }));
     setSuccess("Breakdown resolved! Equipment back to operation.");
     setBreakdowns(prev => prev.map(b => b.id===resolveForm.breakdown_id?{...b,status:"Resolved"}:b));
     setView("breakdowns");
-    setResolveForm({ breakdown_id: "", notes: "", vendor: "" });
+    setResolveForm({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
     setSaving(false);
   };
 
@@ -595,7 +613,7 @@ export default function AssetPage() {
                           {b.status === "Open" && (
                             <Btn small onClick={async () => { await supabase.from("breakdown_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", b.id); setBreakdowns(prev => prev.map(x => x.id===b.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>
                           )}
-                          <Btn small onClick={() => { setResolveForm({ breakdown_id: b.id, notes: "", vendor: "" }); setView("resolve"); }} color={C.green}>✅ Resolve Breakdown</Btn>
+                          <Btn small onClick={() => { setResolveForm({ breakdown_id: b.id, notes: "", vendor: "", downtime_start: b.downtime_start, reported_by: b.reported_by, description: b.description, severity: b.severity }); setView("resolve"); }} color={C.green}>✅ Resolve Breakdown</Btn>
                         </div>
                       )}
                     </div>
