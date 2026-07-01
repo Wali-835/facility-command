@@ -1917,6 +1917,13 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
   const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
+  useEffect(() => {
+    supabase.from("mhe_models").select("brand, model, category, subcategory, technical_specs").order("brand").order("model")
+      .then(({ data, error }) => {
+        if (error) console.error("mhe_models load error:", error);
+        setMheModels(data || []);
+      });
+  }, []);
 
   const handleModelSelect = (modelName) => {
     f("model")(modelName);
