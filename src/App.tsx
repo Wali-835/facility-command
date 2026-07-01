@@ -1918,17 +1918,6 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
   const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
 
-  useEffect(() => {
-    Promise.all([
-      supabase.from("asset_parts").select("*, assets(name)").filter("stock_quantity", "lte", "min_stock_level"),
-      supabase.from("model_parts").select("*").filter("stock_quantity", "lte", "min_stock_level"),
-    ]).then(([apRes, mpRes]) => {
-      const ap = (apRes.data||[]).map(p => ({ ...p, source: "asset" }));
-      const mp = (mpRes.data||[]).map(p => ({ ...p, asset_name: p.model, source: "model" }));
-      setAlerts([...ap,...mp]);
-    });
-  }, []);
-
   const handleModelSelect = (modelName) => {
     f("model")(modelName);
     const found = mheModels.find(m => m.model === modelName);
