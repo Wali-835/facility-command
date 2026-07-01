@@ -2242,7 +2242,7 @@ function LowStockAlerts({ lang, isSupervisor }) {
   const [alerts, setAlerts] = useState([]);
   useEffect(() => {
     Promise.all([
-      supabase.from("asset_parts").select("*, assets(name)"),
+      supabase.from("asset_parts").select("*"),
       supabase.from("model_parts").select("*"),
     ]).then(([apRes, mpRes]) => {
       const ap = (apRes.data||[]).filter(p => (p.stock_quantity||0) <= (p.min_stock_level||1)).map(p => ({ ...p, source: "asset" }));
