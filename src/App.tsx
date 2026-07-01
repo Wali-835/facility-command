@@ -1336,8 +1336,19 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
       setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] }));
       setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
       setShowPartForm(null);
-      // Also update log cost total
       setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) + (qty*unitCost) } : l));
+      // Check if the log is already approved — if so deduct stock immediately
+      const log = logs.find(l => l.id === logId);
+      if (log?.approval_status === "Approved") {
+        if (cleanModelPartId) {
+          const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", cleanModelPartId).single();
+          if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-qty) }).eq("id", cleanModelPartId);
+        }
+        if (cleanAssetPartId) {
+          const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanAssetPartId).single();
+          if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", cleanAssetPartId);
+        }
+      }
     }
     setSaving(false);
   };
