@@ -2246,12 +2246,171 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang }) {
         </div>
         <Btn onClick={generatePMWorkOrders} disabled={generating||pmDueCount===0}>{generating?t(lang,"generating"):`${t(lang,"generate")} ${pmDueCount}`}</Btn>
       </div>
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 24 }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 24, marginBottom: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>{t(lang,"importAssetsExcel")}</div>
+        <div style={{ fontSize: 13, color: C.subtle, marginBottom: 16 }}>Columns: Asset Name, Site, Category, Value, PM Frequency (months), PM Task</div>
         <label style={{ display: "inline-block", background: C.accent, color: "#fff", borderRadius: 6, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: uploading?"not-allowed":"pointer", opacity: uploading?0.7:1 }}>
-          {uploading?t(lang,"importing"):t(lang,"chooseExcelFile")}
+          {uploading?"Importing...":"📂 Choose Excel File"}
           <input type="file" accept=".xlsx,.xls" onChange={handleImport} style={{ display: "none" }} disabled={uploading} />
         </label>
+      </div>
+
+      <AnnualPMPlanUpload assets={assets} lang={lang} />
+    </div>
+  );
+}
+
+function AnnualPMPlanUpload({ assets, lang }) {
+  const [importing, setImporting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [siteCounts, setSiteCounts] = useState([]);
+  const [uploadSite, setUploadSite] = useState("— Select Site —");
+  const [genSite, setGenSite] = useState("All Sites");
+
+  useEffect(() => { loadSiteCounts(); }, []);
+
+  const loadSiteCounts = async () => {
+    const { data } = await supabase.from("maintenance_plans").select("site").eq("active", true);
+    const counts = {};
+    (data||[]).forEach(r => { counts[r.site] = (counts[r.site]||0) + 1; });
+    setSiteCounts(Object.entries(counts).map(([site,count]) => ({ site, count })).sort((a,b) => b.count-a.count));
+  };
+
+  const handleImport = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    if (uploadSite === "— Select Site —") { setError("Please select a site before uploading."); return; }
+    setImporting(true); setError(null);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        const headerRowIdx = rows.findIndex(r => r[0] === "Equipment Name");
+        if (headerRowIdx === -1) { setError("Could not find header row. Expected 'Equipment Name' in column A."); setImporting(false); return; }
+        const weekHeaderRow = rows[headerRowIdx];
+        const weekCols = [];
+        for (let c = 7; c < weekHeaderRow.length; c++) {
+          if (weekHeaderRow[c]) weekCols.push(c);
+        }
+        const dataRows = rows.slice(headerRowIdx + 1).filter(r => r[0]);
+
+        const records = [];
+        for (const r of dataRows) {
+          const name = String(r[0] || "").trim();
+          const code = String(r[1] || "").trim();
+          const category = String(r[2] || "").trim();
+          const site = uploadSite;
+          if (!name) continue;
+
+          const found = assets.find(a => a.name.toLowerCase() === name.toLowerCase() || (code && a.serial_number === code));
+
+          // Find which codes appear in which week columns for this row
+          const codesUsed = {};
+          weekCols.forEach((c, weekIdx) => {
+            const val = String(r[c] || "").trim().toUpperCase();
+            if (val) {
+              if (!codesUsed[val]) codesUsed[val] = weekIdx + 1;
+            }
+          });
+
+          if (Object.keys(codesUsed).length === 0) {
+            // default to Monthly if nothing marked
+            codesUsed["M"] = 1;
+          }
+
+          Object.entries(codesUsed).forEach(([freq, firstWeek]) => {
+            const startMonth = Math.ceil(firstWeek / 4.33) || 1;
+            records.push({
+              id: uid("PLN"),
+              asset_id: found ? found.id : null,
+              asset_name: name,
+              equipment_code: code || null,
+              category: category || null,
+              site,
+              task: "Scheduled Maintenance",
+              frequency: freq,
+              start_month: startMonth,
+              start_week: freq === "W" ? firstWeek : null,
+              active: true,
+            });
+          });
+        }
+
+        if (records.length === 0) { setError("No valid rows found."); setImporting(false); return; }
+        const { error: err } = await supabase.from("maintenance_plans").insert(records);
+        if (err) { setError(err.message); } else {
+          setSuccess(`Imported ${records.length} maintenance plan entries for ${uploadSite}!`);
+          loadSiteCounts();
+        }
+      } catch (ex) { setError("Failed to parse file: " + ex.message); }
+      setImporting(false);
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const generateNow = async () => {
+    setGenerating(true); setError(null);
+    const siteParam = genSite === "All Sites" ? null : genSite;
+    const { data, error: err } = await supabase.rpc("generate_due_pm_work_orders", { target_site: siteParam });
+    if (err) { setError(err.message); } else {
+      const created = data?.[0]?.created_count ?? 0;
+      setSuccess(`Generated ${created} work order(s) for ${genSite}.`);
+    }
+    setGenerating(false);
+  };
+
+  const totalPlans = siteCounts.reduce((s,x) => s+x.count, 0);
+
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.purple}44`, borderRadius: 10, padding: 24 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>📅 Annual Maintenance Plan</div>
+      <div style={{ fontSize: 13, color: C.subtle, marginBottom: 16 }}>
+        Upload your 52-week PM plan per site (Equipment Name, Code, Category, then W1-W52 columns marked W/M/Q/S/A). Work orders auto-generate weekly, or trigger manually per site below.
+      </div>
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+
+      {/* Per-site breakdown */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        <div style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${C.purple}` }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{totalPlans}</div>
+          <div style={{ fontSize: 12, color: C.muted }}>Total plan entries</div>
+        </div>
+        {siteCounts.map(s => (
+          <div key={s.site} style={{ background: C.surface, borderRadius: 8, padding: "12px 20px", borderLeft: `3px solid ${C.blue}` }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.text, fontFamily: "monospace" }}>{s.count}</div>
+            <div style={{ fontSize: 12, color: C.muted }}>{s.site}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Upload */}
+      <div style={{ background: C.surface, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Upload Plan For Site</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={uploadSite} onChange={e => setUploadSite(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13, minWidth: 160 }}>
+            {SITES.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <label style={{ display: "inline-block", background: C.purple, color: "#fff", borderRadius: 6, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: importing?"not-allowed":"pointer", opacity: importing?0.7:1 }}>
+            {importing ? "Importing..." : "📂 Upload Annual Plan"}
+            <input type="file" accept=".xlsx,.xls" onChange={handleImport} style={{ display: "none" }} disabled={importing} />
+          </label>
+        </div>
+      </div>
+
+      {/* Generate */}
+      <div style={{ background: C.surface, borderRadius: 8, padding: 16 }}>
+        <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Generate Work Orders</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={genSite} onChange={e => setGenSite(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13, minWidth: 160 }}>
+            <option>All Sites</option>
+            {siteCounts.map(s => <option key={s.site}>{s.site}</option>)}
+          </select>
+          <Btn onClick={generateNow} disabled={generating} color={C.green}>{generating ? "Generating..." : "⚡ Generate Now"}</Btn>
+        </div>
       </div>
     </div>
   );
