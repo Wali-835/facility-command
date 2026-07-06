@@ -1264,6 +1264,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [expandedLog, setExpandedLog] = useState(null);
+  const [showChecklist, setShowChecklist] = useState(false);
   const vendorOptions = ["— None —",...(vendors||[]).filter(v => v.status==="Active").map(v => v.name)];
   const [form, setForm] = useState({ log_type: "Corrective Repair", title: wo.title, description: "", performed_by: userRole?.name||"", vendor: "", start_date: TODAY, end_date: TODAY, cost: "", downtime_start: "", downtime_end: "" });
   const [partForm, setPartForm] = useState({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
@@ -1382,8 +1383,11 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
           <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
 
           {/* Add Log Button */}
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addMaintenanceLog")}</Btn>
+            {wo.category === "MHE" && (assets||[]).find(a => a.name === wo.asset) && (
+              <button onClick={() => setShowChecklist(true)} style={{ background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{t(lang,"runCILChecklist")}</button>
+            )}
           </div>
 
           {/* Log Form */}
@@ -1525,7 +1529,10 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
             </div>
           )}
         </div>
-      </div>
+     </div>
+      {showChecklist && (
+        <ChecklistModal asset={(assets||[]).find(a => a.name === wo.asset)} workOrderId={wo.id} lang={lang} onClose={() => { setShowChecklist(false); loadLogs(); }} />
+      )}
     </div>
   );
 }
