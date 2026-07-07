@@ -2322,7 +2322,8 @@ function AnnualPMPlanUpload({ assets, lang }) {
           const site = uploadSite;
           if (!name) continue;
 
-          let found = assets.find(a => a.name.toLowerCase() === name.toLowerCase() || (code && a.serial_number === code));
+          // Match by unique code first (names like "Forklift" repeat across many assets)
+          let found = code ? assets.find(a => a.serial_number === code) : assets.find(a => a.name.toLowerCase() === name.toLowerCase());
           if (!found) {
             const newAssetId = uid("AST");
             const newAsset = { id: newAssetId, name, category, location: site, status: "Operational", serial_number: code || null, last_service: TODAY, pm_frequency: 1, pm_task: "Scheduled Maintenance" };
