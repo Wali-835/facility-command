@@ -2275,6 +2275,8 @@ function AnnualPMPlanUpload({ assets, lang }) {
   const [siteCounts, setSiteCounts] = useState([]);
   const [uploadSite, setUploadSite] = useState("— Select Site —");
   const [genSite, setGenSite] = useState("All Sites");
+  const [manageSite, setManageSite] = useState("");
+  const [showManage, setShowManage] = useState(false);
 
   useEffect(() => { loadSiteCounts(); }, []);
 
@@ -2420,7 +2422,17 @@ function AnnualPMPlanUpload({ assets, lang }) {
           </label>
         </div>
       </div>
-
+      {/* Manage */}
+      <div style={{ background: C.surface, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Manage Existing Plan</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={manageSite} onChange={e => setManageSite(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13, minWidth: 160 }}>
+            <option value="">— Select Site —</option>
+            {siteCounts.map(s => <option key={s.site}>{s.site}</option>)}
+          </select>
+          <Btn onClick={() => setShowManage(true)} disabled={!manageSite} color={C.blue}>📋 View / Edit Plan</Btn>
+        </div>
+      </div>
       {/* Generate */}
       <div style={{ background: C.surface, borderRadius: 8, padding: 16 }}>
         <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Generate Work Orders</div>
@@ -2432,6 +2444,131 @@ function AnnualPMPlanUpload({ assets, lang }) {
           <Btn onClick={generateNow} disabled={generating} color={C.green}>{generating ? "Generating..." : "⚡ Generate Now"}</Btn>
         </div>
       </div>
+
+      {showManage && <PlanManageModal site={manageSite} onClose={() => { setShowManage(false); loadSiteCounts(); }} lang={lang} />}
+    </div>
+  );
+}
+
+function PlanManageModal({ site, onClose, lang }) {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editItem, setEditItem] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [form, setForm] = useState({ asset_name: "", equipment_code: "", category: "", task: "Scheduled Maintenance", frequency: "M", start_month: "1", start_week: "1" });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  useEffect(() => { loadPlans(); }, []);
+
+  const loadPlans = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("maintenance_plans").select("*").eq("site", site).order("asset_name");
+    setPlans(data || []);
+    setLoading(false);
+  };
+
+  const savePlan = async () => {
+    if (!form.asset_name) { setError("Asset name required."); return; }
+    setSaving(true);
+    const record = { id: uid("PLN"), asset_id: null, asset_name: form.asset_name, equipment_code: form.equipment_code||null, category: form.category||null, site, task: form.task, frequency: form.frequency, start_month: parseInt(form.start_month)||1, start_week: parseInt(form.start_week)||1, active: true };
+    const { error: err } = await supabase.from("maintenance_plans").insert([record]);
+    if (err) { setError(err.message); } else { setPlans(prev => [...prev, record]); setForm({ asset_name: "", equipment_code: "", category: "", task: "Scheduled Maintenance", frequency: "M", start_month: "1", start_week: "1" }); setShowAdd(false); }
+    setSaving(false);
+  };
+
+  const updatePlan = async (updated) => {
+    const { error: err } = await supabase.from("maintenance_plans").update(updated).eq("id", updated.id);
+    if (!err) { setPlans(prev => prev.map(p => p.id===updated.id?updated:p)); setEditItem(null); } else setError(err.message);
+  };
+
+  const deletePlan = async (id) => {
+    await supabase.from("maintenance_plans").delete().eq("id", id);
+    setPlans(prev => prev.filter(p => p.id !== id));
+  };
+
+  const exportExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const rows = plans.map(p => ({
+      "Asset Name": p.asset_name, "Equipment Code": p.equipment_code||"", "Category": p.category||"",
+      "Task": p.task, "Frequency": p.frequency, "Start Month": p.start_month, "Start Week": p.start_week,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "PM Plan");
+    XLSX.writeFile(wb, `${site}_PM_Plan_Export.xlsx`);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 1000, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>📋 {site} — Maintenance Plan</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{plans.length} entries</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+            <Btn small onClick={() => setShowAdd(v => !v)}>+ Add Entry</Btn>
+            <Btn small onClick={exportExcel} color={C.green}>📥 Export Excel</Btn>
+          </div>
+
+          {showAdd && (
+            <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+                <Input label="Asset Name" value={form.asset_name} onChange={f("asset_name")} />
+                <Input label="Code" value={form.equipment_code} onChange={f("equipment_code")} />
+                <Input label="Category" value={form.category} onChange={f("category")} />
+                <Input label="Task" value={form.task} onChange={f("task")} />
+                <Sel label="Frequency" value={form.frequency} onChange={f("frequency")} options={["W","M","Q","S","A"]} />
+                <Input label="Start Month" value={form.start_month} onChange={f("start_month")} type="number" />
+                <Input label="Start Week" value={form.start_week} onChange={f("start_week")} type="number" />
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <Btn small onClick={savePlan} disabled={saving}>Save</Btn>
+                <Btn small variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
+              </div>
+            </div>
+          )}
+
+          {loading ? <Spinner lang={lang} /> : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  {["Asset Name","Code","Category","Task","Freq","Start Mo.","Start Wk","Last Gen","Actions"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {plans.map((p,i) => (
+                    <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                      <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{p.asset_name}</td>
+                      <td style={{ padding: "8px 10px", color: C.subtle, fontFamily: "monospace", fontSize: 11 }}>{p.equipment_code||"—"}</td>
+                      <td style={{ padding: "8px 10px", color: C.subtle }}>{p.category||"—"}</td>
+                      <td style={{ padding: "8px 10px", color: C.subtle }}>{p.task}</td>
+                      <td style={{ padding: "8px 10px" }}><Badge label={p.frequency} color={C.accent} /></td>
+                      <td style={{ padding: "8px 10px", color: C.subtle }}>{p.start_month}</td>
+                      <td style={{ padding: "8px 10px", color: C.subtle }}>{p.start_week}</td>
+                      <td style={{ padding: "8px 10px", color: C.muted, fontSize: 11 }}>{p.last_generated_date||"—"}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <Btn small onClick={() => setEditItem(p)} color={C.blue}>Edit</Btn>
+                          <Btn small variant="danger" onClick={() => deletePlan(p.id)}>Del</Btn>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {plans.length===0 && <tr><td colSpan={9} style={{ padding: 32, textAlign: "center", color: C.muted }}>No plan entries.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+      {editItem && (
+        <EditModal lang={lang} title="Plan Entry" data={editItem} fields={[{key:"asset_name",label:"Asset Name"},{key:"equipment_code",label:"Code"},{key:"category",label:"Category"},{key:"task",label:"Task"},{key:"frequency",label:"Frequency",options:["W","M","Q","S","A"]},{key:"start_month",label:"Start Month"},{key:"start_week",label:"Start Week"}]} onSave={updatePlan} onClose={() => setEditItem(null)} />
+      )}
     </div>
   );
 }
