@@ -2312,8 +2312,13 @@ function AnnualPMPlanUpload({ assets, lang }) {
           const site = uploadSite;
           if (!name) continue;
 
-          const found = assets.find(a => a.name.toLowerCase() === name.toLowerCase() || (code && a.serial_number === code));
-
+          let found = assets.find(a => a.name.toLowerCase() === name.toLowerCase() || (code && a.serial_number === code));
+          if (!found) {
+            const newAssetId = uid("AST");
+            const newAsset = { id: newAssetId, name, category, location: site, status: "Operational", serial_number: code || null, last_service: TODAY, pm_frequency: 1, pm_task: "Scheduled Maintenance" };
+            const { error: assetErr } = await supabase.from("assets").insert([newAsset]);
+            if (!assetErr) { found = newAsset; assets.push(newAsset); }
+          }
           // Find which codes appear in which week columns for this row
           const codesUsed = {};
           weekCols.forEach((c, weekIdx) => {
@@ -2340,7 +2345,7 @@ function AnnualPMPlanUpload({ assets, lang }) {
               task: "Scheduled Maintenance",
               frequency: freq,
               start_month: startMonth,
-              start_week: freq === "W" ? firstWeek : null,
+              start_week: firstWeek,
               active: true,
             });
           });
