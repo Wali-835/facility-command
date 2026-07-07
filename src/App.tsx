@@ -1617,7 +1617,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
     setSaving(true); setError(null);
     const vendorName = form.vendor === "— None —" || !form.vendor ? null : form.vendor;
     const found = assets.find(a => a.name === form.asset);
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, category: form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null };
+    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
     if (err) { setError(err.message); } else {
       onAdd(record);
