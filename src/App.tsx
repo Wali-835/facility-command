@@ -2285,9 +2285,17 @@ function AnnualPMPlanUpload({ assets, lang }) {
     setSiteCounts(Object.entries(counts).map(([site,count]) => ({ site, count })).sort((a,b) => b.count-a.count));
   };
 
-  const handleImport = (e) => {
+  const handleImport = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     if (uploadSite === "— Select Site —") { setError("Please select a site before uploading."); return; }
+    const { count } = await supabase.from("maintenance_plans").select("id", { count: "exact", head: true }).eq("site", uploadSite);
+    if (count > 0) {
+      if (!window.confirm(`${uploadSite} already has ${count} plan entries. Replace them with this new upload?`)) {
+        e.target.value = "";
+        return;
+      }
+      await supabase.from("maintenance_plans").delete().eq("site", uploadSite);
+    }
     setImporting(true); setError(null);
     const reader = new FileReader();
     reader.onload = async (evt) => {
