@@ -1010,7 +1010,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
 
   return (
     <>
-      {showChecklist && <ChecklistModal asset={asset} lang={lang} onClose={() => setShowChecklist(false)} />}
+      {showChecklist && <ChecklistModal asset={asset} lang={lang} userRoleRole={userRole?.role} onClose={() => setShowChecklist(false)} />}
       <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 820, marginTop: 20, marginBottom: 20 }}>
           <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -1530,7 +1530,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
         </div>
      </div>
       {showChecklist && (
-        <ChecklistModal asset={(assets||[]).find(a => a.name === wo.asset)} workOrderId={wo.id} lang={lang} onClose={() => { setShowChecklist(false); loadLogs(); }} />
+        <ChecklistModal asset={(assets||[]).find(a => a.name === wo.asset)} workOrderId={wo.id} lang={lang} userRoleRole={userRole?.role} onClose={() => { setShowChecklist(false); loadLogs(); }} />
       )}
     </div>
   );
@@ -1679,7 +1679,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{CATEGORY_ICONS[wo.category]||"🔧"} {wo.category||"—"}</td>
               <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
-              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={WO_STATUSES} onChange={val => updateStatus(wo.id,val)} /></td>
+              <td style={{ padding: "10px 12px" }}><StatusSel value={wo.status} options={isAdmin || isSupervisor ? WO_STATUSES : WO_STATUSES.filter(s => s !== "Completed")} onChange={val => updateStatus(wo.id,val)} /></td>
                 <td style={{ padding: "10px 12px", maxWidth: 200 }}>
                 {wo.status_note ? (
                   <div style={{ fontSize: 11, color: C.subtle, background: C.surface, borderRadius: 4, padding: "4px 8px" }}>{wo.status_note}</div>
