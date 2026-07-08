@@ -657,7 +657,7 @@ const onIssueReported = (record) => {
 }
 
 // ─── CIL CHECKLIST MODAL ─────────────────────────────────────────────────────
-function ChecklistModal({ asset, workOrderId, onClose, lang }) {
+function ChecklistModal({ asset, workOrderId, onClose, lang, userRoleRole }) {
   const [items, setItems] = useState([]);
   const [responses, setResponses] = useState({});
   const [executionId, setExecutionId] = useState(null);
@@ -725,12 +725,11 @@ function ChecklistModal({ asset, workOrderId, onClose, lang }) {
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
     const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
     const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects:\n${defects}` : "\nNo defects found."}`;
-    const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: failCount > 0 ? "In Progress" : "Completed", downtime_start: null, downtime_end: null, downtime_hours: null };
+    const needsApproval = userRoleRole === "maintenance";
+    const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: "In Progress", approval_status: "Pending", work_order_id: workOrderId || null, checklist_execution_id: executionId, downtime_start: null, downtime_end: null, downtime_hours: null };
     await supabase.from("maintenance_logs").insert([logRecord]);
-    if (workOrderId) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", workOrderId);
-    const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", asset.name).in("status", ["Open","In Progress","Pending"]).ilike("title","PM - %");
-    if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
-    setSuccess(`${t(lang,"checklistCompleted")} ${failCount > 0 ? `⚠️ ${failCount} FAIL` : "✅"}`);
+    if (workOrderId) await supabase.from("work_orders").update({ status: "Awaiting Approval" }).eq("id", workOrderId);
+    setSuccess(`${t(lang,"checklistCompleted")} ${failCount > 0 ? `⚠️ ${failCount} FAIL` : "✅"} — Sent for supervisor approval.`);
     setSaving(false);
   };
 
