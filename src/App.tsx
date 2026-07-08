@@ -1553,6 +1553,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const [catFilter, setCatFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Active");
   const [showArchived, setShowArchived] = useState(false);
+  const [woType, setWoType] = useState("pm");
   const [archiveMonth, setArchiveMonth] = useState("All");
   const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
@@ -1566,8 +1567,9 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   };
 
   // Split active vs archived
-  const activeWOs = workOrders.filter(w => w.status !== "Completed");
-  const archivedWOs = workOrders.filter(w => w.status === "Completed");
+  const typeFiltered = workOrders.filter(w => woType === "pm" ? w.title.startsWith("PM -") : !w.title.startsWith("PM -"));
+  const activeWOs = typeFiltered.filter(w => w.status !== "Completed");
+  const archivedWOs = typeFiltered.filter(w => w.status === "Completed");
 
   const applyFilters = (list) => list.filter(w =>
     (siteFilter === "All" || w.site === siteFilter) &&
@@ -1758,7 +1760,11 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
           </div>
         </div>
       )}
-
+{/* PM vs Other Toggle */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <button onClick={() => setWoType("pm")} style={{ background: woType==="pm"?C.blue:C.card, color: woType==="pm"?"#fff":C.muted, border: `1px solid ${woType==="pm"?C.blue:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>📅 Scheduled PM</button>
+        <button onClick={() => setWoType("other")} style={{ background: woType==="other"?C.accent:C.card, color: woType==="other"?"#fff":C.muted, border: `1px solid ${woType==="other"?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>🔧 Other Work Orders</button>
+      </div>
       {/* Filters */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
