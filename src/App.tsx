@@ -843,23 +843,32 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRoleRole }) {
 function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
   const [rejectionNotes, setRejectionNotes] = useState("");
   const [showReject, setShowReject] = useState(false);
+  const [showSign, setShowSign] = useState(false);
+  const [signature, setSignature] = useState("");
   const [saving, setSaving] = useState(false);
+  const [sigError, setSigError] = useState(null);
 
   const approve = async () => {
+    if (signature.trim().toLowerCase() !== (userRole?.name || "").trim().toLowerCase()) {
+      setSigError(`Please type your full name exactly: "${userRole?.name}"`);
+      return;
+    }
     setSaving(true);
-    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name || "", approved_at: new Date().toISOString(), status: "Completed" }).eq("id", log.id);
-    // Re-fetch the log to get server timestamp
+    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name || "", approved_at: new Date().toISOString(), approved_signature: signature.trim(), status: "Completed" }).eq("id", log.id);
     const { data: updated } = await supabase.from("maintenance_logs").select("*").eq("id", log.id).single();
-    // Deduct stock for parts used
+
+    // Close linked work order
+    if (log.work_order_id) {
+      await supabase.from("work_orders").update({ status: "Completed" }).eq("id", log.work_order_id);
+    }
+
     const { data: parts } = await supabase.from("spare_parts").select("*").eq("log_id", log.id);
     if (parts?.length) {
       for (const part of parts) {
-        // Deduct from model_parts stock
         if (part.model_part_id) {
           const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", part.model_part_id).single();
           if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-(part.quantity||1)) }).eq("id", part.model_part_id);
         }
-        // Deduct from asset_parts stock
         if (part.asset_part_id) {
           const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", part.asset_part_id).single();
           if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-(part.quantity||1)) }).eq("id", part.asset_part_id);
@@ -874,6 +883,9 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
     if (!rejectionNotes) return;
     setSaving(true);
     await supabase.from("maintenance_logs").update({ approval_status: "Rejected", rejection_notes: rejectionNotes, status: "In Progress" }).eq("id", log.id);
+    if (log.work_order_id) {
+      await supabase.from("work_orders").update({ status: "In Progress", status_note: `Rejected: ${rejectionNotes}` }).eq("id", log.work_order_id);
+    }
     onRejected({ ...log, approval_status: "Rejected", rejection_notes: rejectionNotes, status: "In Progress" });
     setShowReject(false);
     setSaving(false);
@@ -882,10 +894,20 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
   return (
     <div style={{ marginTop: 12, background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14 }}>
       <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingApproval")}</div>
-      {!showReject ? (
+      {!showReject && !showSign ? (
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn onClick={approve} disabled={saving} color={C.green}>{t(lang,"approveLog")}</Btn>
+          <Btn onClick={() => setShowSign(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
           <Btn onClick={() => setShowReject(true)} variant="danger">{t(lang,"rejectLog")}</Btn>
+        </div>
+      ) : showSign ? (
+        <div>
+          <div style={{ fontSize: 12, color: C.subtle, marginBottom: 8 }}>Type your full name to sign and confirm this approval:</div>
+          <Input label="Signature (Full Name)" value={signature} onChange={v => { setSignature(v); setSigError(null); }} placeholder={userRole?.name} />
+          {sigError && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{sigError}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <Btn onClick={approve} disabled={saving || !signature.trim()} color={C.green}>{saving ? "Signing..." : "✓ Confirm Signature & Approve"}</Btn>
+            <Btn variant="secondary" onClick={() => { setShowSign(false); setSignature(""); setSigError(null); }}>{t(lang,"cancel")}</Btn>
+          </div>
         </div>
       ) : (
         <div>
