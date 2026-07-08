@@ -280,7 +280,7 @@ export default function AssetPage() {
     const [bRes, iRes, wRes] = await Promise.all([
       supabase.from("breakdown_reports").select("*").eq("asset_id", assetId).order("reported_at", { ascending: false }),
       supabase.from("issue_reports").select("*").eq("asset_id", assetId).order("reported_at", { ascending: false }),
-      supabase.from("work_orders").select("*").or(`asset_id.eq.${assetId},and(asset.eq.${asset?.name},asset_id.is.null)`).order("due", { ascending: true }),
+      supabase.from("work_orders").select("*").eq("asset_id", assetId).order("due", { ascending: true }),
     ]);
     setBreakdowns(bRes.data || []);
     setIssues(iRes.data || []);
