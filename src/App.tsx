@@ -3182,6 +3182,81 @@ function PartsCatalogMgmt({ lang }) {
     </div>
   );
 }
+function MySubmissions({ userRole, lang }) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedLog, setExpandedLog] = useState(null);
+
+  useEffect(() => { loadMine(); }, []);
+
+  const loadMine = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("maintenance_logs").select("*").eq("performed_by", userRole.name).order("start_date", { ascending: false }).limit(50);
+    setLogs(data || []);
+    setLoading(false);
+  };
+
+  const pending = logs.filter(l => l.approval_status === "Pending");
+  const approved = logs.filter(l => l.approval_status === "Approved");
+  const rejected = logs.filter(l => l.approval_status === "Rejected");
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>📝 {t(lang,"mySubmissions")}</div>
+        <button onClick={loadMine} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↻ {t(lang,"refresh")}</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
+        <StatCard icon="⏳" label={t(lang,"pendingApproval")} value={pending.length} color={C.yellow} />
+        <StatCard icon="✅" label={t(lang,"approved")} value={approved.length} color={C.green} />
+        <StatCard icon="❌" label={t(lang,"rejected")} value={rejected.length} color={C.red} />
+      </div>
+
+      {loading ? <Spinner lang={lang} /> : logs.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noSubmissions")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {logs.map(log => {
+            const color = log.approval_status === "Approved" ? C.green : log.approval_status === "Rejected" ? C.red : C.yellow;
+            return (
+              <div key={log.id} style={{ background: C.card, border: `1px solid ${color}44`, borderRadius: 10, overflow: "hidden" }}>
+                <div onClick={() => setExpandedLog(expandedLog===log.id?null:log.id)} style={{ padding: 14, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{log.title}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>{log.asset_name} · {fmtDate(log.start_date)}</div>
+                  </div>
+                  <Badge label={log.approval_status||"—"} color={color} />
+                </div>
+                {expandedLog===log.id && (
+                  <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
+                    {log.description && <div style={{ marginTop: 10, fontSize: 13, color: C.subtle, lineHeight: 1.6, background: C.surface, borderRadius: 8, padding: 12 }}>{log.description}</div>}
+                    {log.approval_status === "Approved" && log.approved_by && (
+                      <div style={{ marginTop: 10, background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.green }}>
+                        ✅ Approved by <strong>{log.approved_by}</strong> · {log.approved_at ? fmtDateTime(log.approved_at) : ""}
+                        {log.approved_signature && <div style={{ marginTop: 4, fontStyle: "italic" }}>Signed: "{log.approved_signature}"</div>}
+                      </div>
+                    )}
+                    {log.approval_status === "Rejected" && log.rejection_notes && (
+                      <div style={{ marginTop: 10, background: C.red+"11", border: `1px solid ${C.red}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.red }}>
+                        ❌ {log.rejection_notes}
+                      </div>
+                    )}
+                    {log.approval_status === "Pending" && (
+                      <div style={{ marginTop: 10, background: C.yellow+"11", border: `1px solid ${C.yellow}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.yellow }}>
+                        ⏳ Waiting for supervisor approval
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3473,6 +3548,7 @@ export default function App() {
     t(lang,"overview"),
     t(lang,"breakdownsAndIssues"),
     ...(isSupervisor ? [t(lang,"pendingApprovalsSection")] : []),
+    ...(userRole.role === "maintenance" ? [t(lang,"mySubmissions")] : []),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
     ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users")] : []),
   ];
@@ -3507,6 +3583,7 @@ export default function App() {
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} />}
+        {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} assets={assets} lang={lang} userRole={userRole} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} lang={lang} userRole={userRole} />}
