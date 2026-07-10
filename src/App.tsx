@@ -773,7 +773,10 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRoleRole }) {
             <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: C.accent, fontWeight: 700, marginBottom: 12, textTransform: "uppercase" }}>{t(lang,"startChecklist")}</div>
               <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div style={{ flex: 1, minWidth: 200 }}><Input label={t(lang,"technicianName")} value={executedBy} onChange={setExecutedBy} /></div>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>{t(lang,"technicianName")}</div>
+                  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>{executedBy || "—"}</div>
+                </div>
                 <Btn onClick={startExecution}>{t(lang,"start")}</Btn>
               </div>
             </div>
