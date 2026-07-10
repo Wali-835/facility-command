@@ -657,13 +657,13 @@ const onIssueReported = (record) => {
 }
 
 // ─── CIL CHECKLIST MODAL ─────────────────────────────────────────────────────
-function ChecklistModal({ asset, workOrderId, onClose, lang, userRoleRole }) {
+function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
   const [items, setItems] = useState([]);
   const [responses, setResponses] = useState({});
   const [executionId, setExecutionId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [executedBy, setExecutedBy] = useState("");
+  const [executedBy, setExecutedBy] = useState(userRole?.name || userRole?.email || "");
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [filterFreq, setFilterFreq] = useState("All");
@@ -725,7 +725,7 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRoleRole }) {
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
     const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
     const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects:\n${defects}` : "\nNo defects found."}`;
-    const needsApproval = userRoleRole === "maintenance";
+    const needsApproval = userRole?.role === "maintenance";
     const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: "In Progress", approval_status: "Pending", work_order_id: workOrderId || null, checklist_execution_id: executionId, downtime_start: null, downtime_end: null, downtime_hours: null };
     await supabase.from("maintenance_logs").insert([logRecord]);
     if (workOrderId) await supabase.from("work_orders").update({ status: "Awaiting Approval" }).eq("id", workOrderId);
@@ -1007,7 +1007,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRole?.role === "maintenance";
+    const needsApproval = userRoleRole === "maintenance";
     const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess(t(lang,"saving")); setLogs(prev => [record,...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" }); setShowForm(false); }
