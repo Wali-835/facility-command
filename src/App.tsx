@@ -1035,7 +1035,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
 
   return (
     <>
-      {showChecklist && <ChecklistModal asset={asset} lang={lang} userRoleRole={userRole?.role} onClose={() => setShowChecklist(false)} />}
+      {showChecklist && <ChecklistModal asset={asset} lang={lang} userRole={userRole} onClose={() => setShowChecklist(false)} />
       <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 820, marginTop: 20, marginBottom: 20 }}>
           <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -1555,7 +1555,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
         </div>
      </div>
       {showChecklist && (
-        <ChecklistModal asset={(assets||[]).find(a => a.name === wo.asset)} workOrderId={wo.id} lang={lang} userRoleRole={userRole?.role} onClose={() => { setShowChecklist(false); loadLogs(); }} />
+        <ChecklistModal asset={(assets||[]).find(a => a.name === wo.asset)} workOrderId={wo.id} lang={lang} userRole={userRole} onClose={() => { setShowChecklist(false); loadLogs(); }} />
       )}
     </div>
   );
