@@ -492,7 +492,7 @@ function IssueOperatorConfirm({ issue, userRole, lang, onConfirmed }) {
 }
 
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
-function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent }) {
+function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent, isMaintenance, isSupervisor }) {
   const [breakdowns, setBreakdowns] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
