@@ -366,6 +366,68 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
   );
 }
 
+function BreakdownApprovalStep({ breakdown, userRole, lang, onApproved }) {
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [show, setShow] = useState(false);
+
+  const approve = async () => {
+    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
+    setSaving(true);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
+    const now = new Date().toISOString();
+    await supabase.from("breakdown_reports").update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", breakdown.id);
+    onApproved({ ...breakdown, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingSupervisorApproval")}</div>
+      {!show ? (
+        <Btn onClick={() => setShow(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
+      ) : (
+        <div>
+          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
+          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
+            <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
+  const [saving, setSaving] = useState(false);
+  const isReporter = userRole?.name === breakdown.reported_by;
+
+  const confirm = async () => {
+    setSaving(true);
+    const now = new Date().toISOString();
+    await supabase.from("breakdown_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", breakdown.id);
+    onConfirmed({ ...breakdown, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 {t(lang,"pendingOperatorConfirmation")}</div>
+      {isReporter ? (
+        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":t(lang,"operatorConfirm")}</Btn>
+      ) : (
+        <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"awaitingYourConfirmation")} ({breakdown.reported_by})</div>
+      )}
+    </div>
+  );
+}
+
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
 function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent }) {
   const [breakdowns, setBreakdowns] = useState([]);
@@ -585,9 +647,20 @@ const onIssueReported = (record) => {
                 <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: C.subtle }}>
                   <strong style={{ color: C.text }}>{t(lang,"issue")}:</strong> {b.description}
                 </div>
-                {isResolved && b.maintenance_notes && (
-                  <div style={{ background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: C.subtle }}>
-                    <strong style={{ color: C.green }}>✅ {t(lang,"resolvedBy")} {b.resolved_by}:</strong> {b.maintenance_notes}
+                {b.maintenance_notes && (
+                  <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}33`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: C.subtle }}>
+                    <strong style={{ color: C.blue }}>🔧 {t(lang,"resolvedBy")} {b.resolved_by}:</strong> {b.maintenance_notes}
+                  </div>
+                )}
+                {b.status === "Pending Supervisor Approval" && isSupervisor && (
+                  <BreakdownApprovalStep breakdown={b} userRole={userRole} lang={lang} onApproved={(updated) => setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x))} />
+                )}
+                {b.status === "Pending Operator Confirmation" && (
+                  <BreakdownOperatorConfirm breakdown={b} userRole={userRole} lang={lang} onConfirmed={(updated) => setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x))} />
+                )}
+                {b.status === "Resolved" && b.supervisor_approved_by && (
+                  <div style={{ background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12, color: C.green }}>
+                    ✅ Supervisor: {b.supervisor_approved_by} {b.operator_confirmed_by && ` · ${t(lang,"confirmedBy")}: ${b.operator_confirmed_by}`}
                   </div>
                 )}
                 {!isResolved && (userRole.role === "maintenance" || userRole.role === "admin") && (
