@@ -847,17 +847,19 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
   const [rejectionNotes, setRejectionNotes] = useState("");
   const [showReject, setShowReject] = useState(false);
   const [showSign, setShowSign] = useState(false);
-  const [signature, setSignature] = useState("");
+  const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [sigError, setSigError] = useState(null);
 
   const approve = async () => {
-    if (signature.trim().toLowerCase() !== (userRole?.name || "").trim().toLowerCase()) {
-      setSigError(`Please type your full name exactly: "${userRole?.name}"`);
-      return;
-    }
+    if (!password) { setSigError(t(lang,"enterPasswordToApprove")); return; }
     setSaving(true);
-    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name || "", approved_at: new Date().toISOString(), approved_signature: signature.trim(), status: "Completed" }).eq("id", log.id);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setSigError(t(lang,"incorrectPassword")); setSaving(false); return; }
+
+    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name || "", approved_at: new Date().toISOString(), approved_signature: userRole?.name, status: "Completed" }).eq("id", log.id);
     const { data: updated } = await supabase.from("maintenance_logs").select("*").eq("id", log.id).single();
 
     // Close linked work order
@@ -904,12 +906,12 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
         </div>
       ) : showSign ? (
         <div>
-          <div style={{ fontSize: 12, color: C.subtle, marginBottom: 8 }}>Type your full name to sign and confirm this approval:</div>
-          <Input label="Signature (Full Name)" value={signature} onChange={v => { setSignature(v); setSigError(null); }} placeholder={userRole?.name} />
+          <div style={{ fontSize: 12, color: C.subtle, marginBottom: 8 }}>{t(lang,"enterPasswordToApprove")}:</div>
+          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setSigError(null); }} placeholder="••••••••" />
           {sigError && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{sigError}</div>}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <Btn onClick={approve} disabled={saving || !signature.trim()} color={C.green}>{saving ? "Signing..." : "✓ Confirm Signature & Approve"}</Btn>
-            <Btn variant="secondary" onClick={() => { setShowSign(false); setSignature(""); setSigError(null); }}>{t(lang,"cancel")}</Btn>
+            <Btn onClick={approve} disabled={saving || !password} color={C.green}>{saving ? "Verifying..." : "✓ Confirm & Approve"}</Btn>
+            <Btn variant="secondary" onClick={() => { setShowSign(false); setPassword(""); setSigError(null); }}>{t(lang,"cancel")}</Btn>
           </div>
         </div>
       ) : (
