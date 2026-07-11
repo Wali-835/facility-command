@@ -428,6 +428,69 @@ function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
   );
 }
 
+function IssueApprovalStep({ issue, userRole, lang, onApproved }) {
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [show, setShow] = useState(false);
+
+  const approve = async () => {
+    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
+    setSaving(true);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
+    const now = new Date().toISOString();
+    await supabase.from("issue_reports").update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", issue.id);
+    if (issue.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
+    onApproved({ ...issue, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
+      <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingSupervisorApproval")}</div>
+      {!show ? (
+        <Btn onClick={() => setShow(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
+      ) : (
+        <div>
+          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
+          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
+            <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IssueOperatorConfirm({ issue, userRole, lang, onConfirmed }) {
+  const [saving, setSaving] = useState(false);
+  const isReporter = userRole?.name === issue.reported_by;
+
+  const confirm = async () => {
+    setSaving(true);
+    const now = new Date().toISOString();
+    await supabase.from("issue_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", issue.id);
+    onConfirmed({ ...issue, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
+      <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 {t(lang,"pendingOperatorConfirmation")}</div>
+      {isReporter ? (
+        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":t(lang,"operatorConfirm")}</Btn>
+      ) : (
+        <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"awaitingYourConfirmation")} ({issue.reported_by})</div>
+      )}
+    </div>
+  );
+}
+
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
 function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent }) {
   const [breakdowns, setBreakdowns] = useState([]);
@@ -497,10 +560,10 @@ const onIssueReported = (record) => {
 
   const resolveIssue = async (issue) => {
     const now = new Date().toISOString();
-    await supabase.from("issue_reports").update({ status: "Resolved", resolved_by: userRole.name || "", resolved_at: now }).eq("id", issue.id);
-    if (issue.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
+    const newStatus = userRole?.role === "maintenance" ? "Pending Supervisor Approval" : "Resolved";
+    await supabase.from("issue_reports").update({ status: newStatus, resolved_by: userRole.name || "", resolved_at: now, supervisor_approved_by: newStatus === "Resolved" ? userRole?.name : null, supervisor_approved_at: newStatus === "Resolved" ? now : null }).eq("id", issue.id);
+    if (issue.work_order_id && newStatus === "Resolved") await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
 
-    // Auto-create maintenance log
     await supabase.from("maintenance_logs").insert([{
       id: uid("LOG"),
       asset_id: issue.asset_id,
@@ -519,8 +582,8 @@ const onIssueReported = (record) => {
       downtime_hours: null,
     }]);
 
-    setIssues(prev => { const updated = prev.map(i => i.id === issue.id ? { ...i, status: "Resolved", resolved_by: userRole.name, resolved_at: now } : i); if (setIssuesFromParent) setIssuesFromParent(updated); return updated; });
-    setSuccess(t(lang,"resolved"));
+    setIssues(prev => { const updated = prev.map(i => i.id === issue.id ? { ...i, status: newStatus, resolved_by: userRole.name, resolved_at: now } : i); if (setIssuesFromParent) setIssuesFromParent(updated); return updated; });
+    setSuccess(newStatus === "Resolved" ? t(lang,"resolved") : t(lang,"pendingSupervisorApproval"));
   };
 
   const acknowledgeIssue = async (issue) => {
@@ -709,9 +772,15 @@ const onIssueReported = (record) => {
                   {issue.work_order_id && (
                     <div style={{ fontSize: 12, color: C.blue, marginBottom: 12 }}>📋 {t(lang,"workOrders")}: {issue.work_order_id}</div>
                   )}
-                  {isResolved && issue.resolution_notes && (
-                    <div style={{ background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: C.subtle }}>
-                      <strong style={{ color: C.green }}>✅ {t(lang,"resolvedBy")} {issue.resolved_by}:</strong> {issue.resolution_notes}
+                  {issue.status === "Pending Supervisor Approval" && isSupervisor && (
+                    <IssueApprovalStep issue={issue} userRole={userRole} lang={lang} onApproved={(updated) => setIssues(prev => prev.map(x => x.id===updated.id?updated:x))} />
+                  )}
+                  {issue.status === "Pending Operator Confirmation" && (
+                    <IssueOperatorConfirm issue={issue} userRole={userRole} lang={lang} onConfirmed={(updated) => setIssues(prev => prev.map(x => x.id===updated.id?updated:x))} />
+                  )}
+                  {issue.status === "Resolved" && issue.supervisor_approved_by && (
+                    <div style={{ background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 12, color: C.green }}>
+                      ✅ Supervisor: {issue.supervisor_approved_by}{issue.operator_confirmed_by && ` · ${t(lang,"confirmedBy")}: ${issue.operator_confirmed_by}`}
                     </div>
                   )}
                   {!isResolved && (userRole.role === "maintenance" || userRole.role === "admin") && (
