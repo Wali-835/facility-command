@@ -320,7 +320,8 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     setSaving(true); setError(null);
     const now = new Date().toISOString();
     const hours = minutesBetween(breakdown.downtime_start, now);
-    await supabase.from("breakdown_reports").update({ status: "Resolved", resolved_by: form.resolved_by, resolved_at: now, downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes }).eq("id", breakdown.id);
+    const newStatus = userRole?.role === "maintenance" ? "Pending Supervisor Approval" : "Resolved";
+    await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: form.resolved_by, resolved_at: now, downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes, supervisor_approved_by: newStatus === "Resolved" ? userRole?.name : null, supervisor_approved_at: newStatus === "Resolved" ? now : null }).eq("id", breakdown.id);
     await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
     const logRecord = { id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name, log_type: "Corrective Repair", title: `Breakdown Repair — ${breakdown.severity} severity`, description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`, performed_by: form.resolved_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null, downtime_end: TODAY, downtime_hours: hours };
     await supabase.from("maintenance_logs").insert([logRecord]);
