@@ -412,6 +412,8 @@ function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
     setSaving(true);
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", breakdown.id);
+    // Also approve the linked maintenance log so it clears from Pending Approvals
+    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: breakdown.supervisor_approved_by, approved_at: breakdown.supervisor_approved_at, status: "Completed" }).eq("asset_id", breakdown.asset_id).eq("approval_status", "Pending").ilike("title", "Breakdown Repair%");
     onConfirmed({ ...breakdown, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
     setSaving(false);
   };
