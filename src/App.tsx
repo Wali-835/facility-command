@@ -1232,7 +1232,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                             <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>⛔ {t(lang,"downtimeStart")}</div><div style={{ fontSize: 13, color: C.red, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_start)||"—"}</div></div>
                             <div style={{ fontSize: 20, color: C.muted, alignSelf: "center" }}>→</div>
                             <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>✅ {t(lang,"backToOperationLabel")}</div><div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginTop: 2 }}>{fmtDate(log.downtime_end)||"—"}</div></div>
-                            {log.downtime_hours && <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>⏱ {t(lang,"totalDowntimeLabel")}</div><div style={{ fontSize: 13, color: C.yellow, fontWeight: 700, marginTop: 2 }}>{log.downtime_hours}h</div></div>}
+                            {log.downtime_hours && <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>⏱ {t(lang,"totalDowntimeLabel")}</div><div style={{ fontSize: 13, color: C.yellow, fontWeight: 700, marginTop: 2 }}>{formatDowntime(log.downtime_hours)}</div></div>}
                           </div>
                         )}
                         <div style={{ marginTop: 14 }}>
