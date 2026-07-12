@@ -320,9 +320,10 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     setSaving(true); setError(null);
     const now = new Date().toISOString();
     const hours = minutesBetween(breakdown.downtime_start, now);
-    const newStatus = userRole?.role === "maintenance" ? "Pending Supervisor Approval" : "Resolved";
-    await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: form.resolved_by, resolved_at: now, downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes, supervisor_approved_by: newStatus === "Resolved" ? userRole?.name : null, supervisor_approved_at: newStatus === "Resolved" ? now : null }).eq("id", breakdown.id);
-    await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
+    const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
+    const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
+    await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: form.resolved_by, resolved_at: now, downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", breakdown.id);
+    // Asset stays Under Maintenance until Operator gives final confirmation
     const logRecord = { id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name, log_type: "Corrective Repair", title: `Breakdown Repair — ${breakdown.severity} severity`, description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`, performed_by: form.resolved_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null, downtime_end: TODAY, downtime_hours: hours };
     await supabase.from("maintenance_logs").insert([logRecord]);
     const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", breakdown.asset_name).in("status", ["Open","In Progress","Pending"]);
@@ -412,7 +413,7 @@ function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
     setSaving(true);
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", breakdown.id);
-    // Also approve the linked maintenance log so it clears from Pending Approvals
+    await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
     await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: breakdown.supervisor_approved_by, approved_at: breakdown.supervisor_approved_at, status: "Completed" }).eq("asset_id", breakdown.asset_id).eq("approval_status", "Pending").ilike("title", "Breakdown Repair%");
     onConfirmed({ ...breakdown, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
     setSaving(false);
