@@ -726,7 +726,7 @@ const onIssueReported = (record) => {
                     ✅ Supervisor: {b.supervisor_approved_by} {b.operator_confirmed_by && ` · ${t(lang,"confirmedBy")}: ${b.operator_confirmed_by}`}
                   </div>
                 )}
-                {(b.status === "Open" || b.status === "Acknowledged") && (isMaintenance || isAdmin) && (
+                {(b.status === "Open" || b.status === "Acknowledged") && isMaintenance && (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {b.status === "Open" && <Btn onClick={() => acknowledge(b)} color={C.blue}>{t(lang,"acknowledge")}</Btn>}
                     <Btn onClick={() => setResolveItem(b)} color={C.green}>{t(lang,"markResolved")}</Btn>
