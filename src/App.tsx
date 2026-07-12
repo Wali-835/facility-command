@@ -658,10 +658,10 @@ const onIssueReported = (record) => {
           <button onClick={() => setActiveView("breakdowns")} style={{ background: activeView==="breakdowns"?C.red:C.card, color: activeView==="breakdowns"?"#fff":C.muted, border: `1px solid ${activeView==="breakdowns"?C.red:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>🚨 {t(lang,"breakdowns")} ({breakdowns.filter(b=>b.status==="Open").length})</button>
           <button onClick={() => setActiveView("issues")} style={{ background: activeView==="issues"?C.yellow:C.card, color: activeView==="issues"?"#fff":C.muted, border: `1px solid ${activeView==="issues"?C.yellow:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>⚠️ {t(lang,"issues")} ({issues.filter(i=>i.status==="Open").length})</button>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {["All","Open","Acknowledged","Resolved"].map(s => (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {["All","Open","Acknowledged","Pending Supervisor Approval","Pending Operator Confirmation","Resolved"].map(s => (
             <button key={s} onClick={() => setFilter(s)} style={{ background: filter===s?C.accent:C.card, color: filter===s?"#fff":C.muted, border: `1px solid ${filter===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-              {s === "All" ? t(lang,"all") : s === "Open" ? t(lang,"open") : s === "Acknowledged" ? t(lang,"acknowledged") : t(lang,"resolved")}
+              {s === "All" ? t(lang,"all") : s === "Open" ? t(lang,"open") : s === "Acknowledged" ? t(lang,"acknowledged") : s === "Resolved" ? t(lang,"resolved") : s === "Pending Supervisor Approval" ? t(lang,"pendingSupervisorApproval") : t(lang,"pendingOperatorConfirmation")}
             </button>
           ))}
           <button onClick={loadAll} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↻</button>
