@@ -783,6 +783,13 @@ export default function AssetPage() {
 
       ) : null}
 
+      {/* Sign out */}
+      {userRole && (
+        <div style={{ textAlign: "center", marginTop: 20 }}>
+          <button onClick={async () => { await supabase.auth.signOut(); setUserRole(null); setEmail(""); setPassword(""); setView("home"); }} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 20px", color: C.muted, cursor: "pointer", fontSize: 13 }}>Sign Out</button>
+        </div>
+      )}
+
       {/* Footer */}
       <div style={{ textAlign: "center", marginTop: 24, fontSize: 11, color: C.muted }}>
         Facility Command · EPx Logistics
