@@ -10,7 +10,7 @@ const C = {
 const SEVERITY_COLORS = { Critical: "#ef4444", High: "#f97316", Medium: "#eab308", Low: "#22c55e" };
 const statusColor = (s) => ({ Operational: C.green, "Under Maintenance": C.accent, Degraded: C.red, Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow, Acknowledged: C.blue, Resolved: C.green }[s] || C.muted);
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
-const fmtDateTime = (d) => { if (!d) return "—"; try { const date = new Date(d.replace(" ","T")); if (isNaN(date.getTime())) return "—"; return date.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" }); } catch { return "—"; } };
+const fmtDateTime = (d) => { if (!d) return "—"; try { let s = d.replace(" ","T"); if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z"; const date = new Date(s); if (isNaN(date.getTime())) return "—"; return date.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" }); } catch { return "—"; } };
 const uid = (p) => `${p}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2,5).toUpperCase()}`;
 const TODAY = new Date().toISOString().split("T")[0];
 
@@ -369,33 +369,29 @@ export default function AssetPage() {
     const downtimeStartTs = resolveForm.downtime_start;
     const mins = downtimeStartTs ? Math.round((new Date(now) - new Date(downtimeStartTs.endsWith("Z") ? downtimeStartTs : downtimeStartTs+"Z")) / (1000*60)) : null;
     const downtimeStartDate = downtimeStartTs ? downtimeStartTs.split("T")[0] : TODAY;
-    await supabase.from("breakdown_reports").update({ status: "Resolved", resolved_by: userRole?.name, resolved_at: now, downtime_end: now, downtime_hours: mins, maintenance_notes: resolveForm.notes }).eq("id", resolveForm.breakdown_id);
-    await supabase.from("assets").update({ status: "Operational" }).eq("id", asset.id);
+    const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
+    const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
+    await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: userRole?.name, resolved_at: now, downtime_end: now, downtime_hours: mins, maintenance_notes: resolveForm.notes, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", resolveForm.breakdown_id);
     await supabase.from("maintenance_logs").insert([{
       id: uid("LOG"), asset_id: asset.id, asset_name: asset.name,
       log_type: "Corrective Repair",
-      title: `Breakdown Resolved — ${resolveForm.severity||""} severity`,
+      title: `Breakdown Repair — ${resolveForm.severity||""} severity`,
       description: `BREAKDOWN REPORTED BY: ${resolveForm.reported_by||""}\n\nISSUE: ${resolveForm.description||""}\n\nMAINTENANCE NOTES: ${resolveForm.notes}`,
       performed_by: userRole?.name,
       vendor: resolveForm.vendor==="— None —"?null:resolveForm.vendor||null,
       start_date: downtimeStartDate,
       end_date: TODAY,
       cost: null,
-      status: "Completed",
-      approval_status: isSupervisor ? "Approved" : "Pending",
-      approved_by: isSupervisor ? userRole?.name : null,
-      approved_at: isSupervisor ? new Date().toISOString() : null,
+      status: isSupervisorOrAdmin ? "Completed" : "In Progress",
+      approval_status: isSupervisorOrAdmin ? "Approved" : "Pending",
+      approved_by: isSupervisorOrAdmin ? userRole?.name : null,
+      approved_at: isSupervisorOrAdmin ? new Date().toISOString() : null,
       downtime_start: downtimeStartDate,
       downtime_end: TODAY,
       downtime_hours: mins,
     }]);
-    setAsset(prev => ({ ...prev, status: "Operational" }));
-    setSuccess("Breakdown resolved! Equipment back to operation.");
-    setBreakdowns(prev => prev.map(b => b.id===resolveForm.breakdown_id?{...b,status:"Resolved"}:b));
-    setView("breakdowns");
-    setResolveForm({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
-    setSaving(false);
-  };
+    setSuccess(isSupervisorOrAdmin ? "Breakdown resolved — pending operator confirmation." : "Breakdown resolved — pending supervisor approval.");
+    setBreakdowns(prev => prev.map(b => b.id===resolveForm.breakdown_id?{...b,status:newStatus}:b));
 
   // ─── Maintenance Log Form ─────────────────────────────────────────────────
   const [logForm, setLogForm] = useState({ log_type: "Corrective Repair", title: "", description: "", performed_by: "", cost: "", vendor: "" });
