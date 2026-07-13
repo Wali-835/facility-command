@@ -392,6 +392,10 @@ export default function AssetPage() {
     }]);
     setSuccess(isSupervisorOrAdmin ? "Breakdown resolved — pending operator confirmation." : "Breakdown resolved — pending supervisor approval.");
     setBreakdowns(prev => prev.map(b => b.id===resolveForm.breakdown_id?{...b,status:newStatus}:b));
+    setView("breakdowns");
+    setResolveForm({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
+    setSaving(false);
+  };
 
   // ─── Maintenance Log Form ─────────────────────────────────────────────────
   const [logForm, setLogForm] = useState({ log_type: "Corrective Repair", title: "", description: "", performed_by: "", cost: "", vendor: "" });
