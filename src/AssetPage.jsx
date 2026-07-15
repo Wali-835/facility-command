@@ -390,6 +390,7 @@ export default function AssetPage() {
       approval_status: isSupervisorOrAdmin ? "Approved" : "Pending",
       approved_by: isSupervisorOrAdmin ? userRole?.name : null,
       approved_at: isSupervisorOrAdmin ? new Date().toISOString() : null,
+      breakdown_id: resolveForm.breakdown_id,
       downtime_start: downtimeStartDate,
       downtime_end: TODAY,
       downtime_hours: mins,
