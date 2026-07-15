@@ -312,7 +312,9 @@ export default function AssetPage() {
   };
 
   // ─── Breakdown Form ───────────────────────────────────────────────────────
-  const [brkForm, setBrkForm] = useState({ reported_by: "", severity: "High", description: "" });
+  const [brkForm, setBrkForm] = useState({ reported_by: userRole?.name || "", severity: "High", description: "" });
+
+  useEffect(() => { if (userRole?.name) setBrkForm(p => ({ ...p, reported_by: userRole.name })); }, [userRole]);
   const bf = (k) => (v) => setBrkForm(p => ({ ...p, [k]: v }));
 
   const submitBreakdown = async () => {
@@ -335,7 +337,9 @@ export default function AssetPage() {
   };
 
   // ─── Issue Form ───────────────────────────────────────────────────────────
-  const [issForm, setIssForm] = useState({ reported_by: "", severity: "Medium", description: "" });
+  const [issForm, setIssForm] = useState({ reported_by: userRole?.name || "", severity: "Medium", description: "" });
+
+  useEffect(() => { if (userRole?.name) setIssForm(p => ({ ...p, reported_by: userRole.name })); }, [userRole]);
   const isf = (k) => (v) => setIssForm(p => ({ ...p, [k]: v }));
 
   const submitIssue = async () => {
@@ -559,7 +563,10 @@ export default function AssetPage() {
           <SectionHeader title="🚨 Report Breakdown" onBack={() => setView("home")} />
           <div style={{ background: C.card, border: `1px solid ${C.red}44`, borderRadius: 12, padding: 20 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <Input label="Your Name *" value={brkForm.reported_by} onChange={bf("reported_by")} placeholder="Full name" />
+              <div>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Your Name</div>
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px", color: C.text, fontSize: 15 }}>{userRole?.name || "—"}</div>
+              </div>
               <Sel label="Severity" value={brkForm.severity} onChange={bf("severity")} options={["Critical","High","Medium","Low"]} />
               <Textarea label="Describe the issue *" value={brkForm.description} onChange={bf("description")} placeholder="What happened? Any error messages?" />
               <div style={{ background: C.yellow+"22", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, fontSize: 13, color: C.yellow }}>
@@ -580,7 +587,10 @@ export default function AssetPage() {
               ✅ Equipment stays RUNNING — this creates a work order for maintenance
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <Input label="Your Name *" value={issForm.reported_by} onChange={isf("reported_by")} placeholder="Full name" />
+              <div>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Your Name</div>
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px", color: C.text, fontSize: 15 }}>{userRole?.name || "—"}</div>
+              </div>
               <Sel label="Severity" value={issForm.severity} onChange={isf("severity")} options={["Critical","High","Medium","Low"]} />
               <Textarea label="Describe the issue *" value={issForm.description} onChange={isf("description")} placeholder="Noise, leak, warning light, performance drop..." />
             </div>
