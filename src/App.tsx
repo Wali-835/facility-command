@@ -324,7 +324,8 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
     await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: form.resolved_by, resolved_at: now, downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", breakdown.id);
     // Asset stays Under Maintenance until Operator gives final confirmation
-    const logRecord = { id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name, log_type: "Corrective Repair", title: `Breakdown Repair — ${breakdown.severity} severity`, description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`, performed_by: form.resolved_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY, end_date: TODAY, cost: null, status: "Completed", downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null, downtime_end: TODAY, downtime_hours: hours };
+    const isSupervisorOrAdmin2 = userRole?.role === "supervisor" || userRole?.role === "admin";
+    const logRecord = { id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name, log_type: "Corrective Repair", title: `Breakdown Repair — ${breakdown.severity} severity`, description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`, performed_by: form.resolved_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY, end_date: TODAY, cost: null, status: isSupervisorOrAdmin2 ? "Completed" : "In Progress", approval_status: isSupervisorOrAdmin2 ? "Approved" : "Pending", approved_by: isSupervisorOrAdmin2 ? userRole?.name : null, approved_at: isSupervisorOrAdmin2 ? new Date().toISOString() : null, breakdown_id: breakdown.id, downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null, downtime_end: TODAY, downtime_hours: hours };
     await supabase.from("maintenance_logs").insert([logRecord]);
     const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", breakdown.asset_name).in("status", ["Open","In Progress","Pending"]);
     if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
@@ -414,7 +415,7 @@ function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", breakdown.id);
     await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
-    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: breakdown.supervisor_approved_by, approved_at: breakdown.supervisor_approved_at, status: "Completed" }).eq("asset_id", breakdown.asset_id).eq("approval_status", "Pending").ilike("title", "Breakdown Repair%");
+    await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: breakdown.supervisor_approved_by || userRole?.name, approved_at: breakdown.supervisor_approved_at || now, status: "Completed" }).eq("breakdown_id", breakdown.id);
     onConfirmed({ ...breakdown, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
     setSaving(false);
   };
@@ -3485,7 +3486,11 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
               </table>
             </div>
           )}
-          {(isAdmin || !dimmed) && (
+          {log.breakdown_id || log.issue_id ? (
+            <div style={{ marginTop: 12, background: C.blue+"11", border: `1px solid ${C.blue}33`, borderRadius: 8, padding: 12, fontSize: 12, color: C.blue }}>
+              ℹ️ This log is linked to a {log.breakdown_id ? "breakdown" : "issue"}. Please approve it from the <strong>Breakdowns & Issues</strong> tab so the operator confirmation step isn't skipped.
+            </div>
+          ) : (isAdmin || !dimmed) && (
             <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={() => setLogs(prev => prev.filter(l => l.id!==log.id))} onRejected={() => setLogs(prev => prev.filter(l => l.id!==log.id))} />
           )}
         </div>
