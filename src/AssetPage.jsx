@@ -574,7 +574,7 @@ export default function AssetPage() {
               </>
             )}
           </div>
-
+        </>
       ) : view === "breakdown" ? (
         <div>
           <SectionHeader title="🚨 Report Breakdown" onBack={() => setView("home")} />
