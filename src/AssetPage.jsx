@@ -501,6 +501,11 @@ export default function AssetPage() {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "Arial, sans-serif", color: C.text, maxWidth: 520, margin: "0 auto", padding: 16 }}>
 
       {/* Header */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+        <button onClick={toggleLanguage} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", color: C.text, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+          {lang === "en" ? "🇸🇦 العربية" : "🇬🇧 English"}
+        </button>
+      </div>
       <div style={{ background: C.accent, borderRadius: 12, padding: 20, marginBottom: 20, textAlign: "center" }}>
         <div style={{ fontSize: 32, marginBottom: 8 }}>🏭</div>
         <div style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>{asset?.name}</div>
