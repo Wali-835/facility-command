@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
+import { t } from "./i18n.js";
 
 const C = {
   bg: "#0d0f12", surface: "#141720", card: "#1a1e2a", border: "#252b3b",
@@ -215,6 +216,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
 // ─── MAIN ASSET PAGE ──────────────────────────────────────────────────────────
 export default function AssetPage() {
   const [asset, setAsset] = useState(null);
+  const [lang, setLang] = useState("en");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -251,6 +253,7 @@ export default function AssetPage() {
       if (session) {
         const { data } = await supabase.from("user_roles").select("*").eq("email", session.user.email).single();
         setUserRole(data || { role: "operations", name: session.user.email });
+        if (data?.language) setLang(data.language);
         loadVendors();
       }
     });
@@ -307,8 +310,17 @@ export default function AssetPage() {
     if (err) { setError(err.message); setSigning(false); return; }
     const { data } = await supabase.from("user_roles").select("*").eq("email", email).single();
     setUserRole(data || { role: "operations", name: email });
+    if (data?.language) setLang(data.language);
     loadVendors();
     setSigning(false);
+  };
+
+  const toggleLanguage = async () => {
+    const newLang = lang === "en" ? "ar" : "en";
+    setLang(newLang);
+    if (userRole) {
+      await supabase.from("user_roles").update({ language: newLang }).eq("email", userRole.email || (await supabase.auth.getSession()).data.session?.user?.email);
+    }
   };
 
   // ─── Breakdown Form ───────────────────────────────────────────────────────
