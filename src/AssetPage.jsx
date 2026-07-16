@@ -633,7 +633,6 @@ export default function AssetPage() {
                       {b.status === "Pending Operator Confirmation" && (
                         <QROperatorConfirm record={b} table="breakdown_reports" userRole={userRole} onDone={(updated) => { setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x)); setAsset(prev => ({ ...prev, status: "Operational" })); }} />
                       )}
-                      )}
                     </div>
                   ))}
                 </div>
