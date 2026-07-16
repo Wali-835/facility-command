@@ -553,28 +553,27 @@ export default function AssetPage() {
           {/* Action Buttons */}
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {/* Everyone can report */}
-            <Btn onClick={() => setView("breakdown")} color={C.red}>🚨 Report Breakdown</Btn>
-            <Btn onClick={() => setView("issue")} color={C.yellow}>⚠️ Report Issue</Btn>
+            <Btn onClick={() => setView("breakdown")} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
+            <Btn onClick={() => setView("issue")} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
 
             {/* Operations: view open breakdowns/issues */}
             {isOperations && (
-              <Btn onClick={() => { loadBreakdownsAndIssues(); setView("breakdowns"); }} secondary>👁 View Open Breakdowns & Issues</Btn>
+              <Btn onClick={() => { loadBreakdownsAndIssues(); setView("breakdowns"); }} secondary>👁 {t(lang,"breakdownsAndIssues")}</Btn>
             )}
 
             {/* Maintenance+ */}
             {isMaintenance && (
               <>
-                <Btn onClick={() => { loadBreakdownsAndIssues(); setView("breakdowns"); }} color={C.red}>🚨 Breakdowns & Issues</Btn>
-                <Btn onClick={() => { loadBreakdownsAndIssues(); setView("workorders"); }} color={C.blue}>📋 Work Orders</Btn>
-                <Btn onClick={() => { loadLogs(); loadCatalog(); setView("log"); }} color={C.blue}>🔧 Add Maintenance Log</Btn>
-                <Btn onClick={() => setView("checklist")} color={C.green}>📋 Run PM Checklist</Btn>
-                <Btn onClick={() => { loadLogs(); setView("parts"); }} color={C.purple}>🔩 Add Spare Parts</Btn>
+                <Btn onClick={() => { loadBreakdownsAndIssues(); setView("breakdowns"); }} color={C.red}>🚨 {t(lang,"breakdownsAndIssues")}</Btn>
+                <Btn onClick={() => { loadBreakdownsAndIssues(); setView("workorders"); }} color={C.blue}>📋 {t(lang,"workOrders")}</Btn>
+                <Btn onClick={() => { loadLogs(); loadCatalog(); setView("log"); }} color={C.blue}>🔧 {t(lang,"addMaintenanceLog")}</Btn>
+                <Btn onClick={() => setView("checklist")} color={C.green}>📋 {t(lang,"runCILChecklist")}</Btn>
+                <Btn onClick={() => { loadLogs(); setView("parts"); }} color={C.purple}>🔩 {t(lang,"addPart")}</Btn>
                 <Btn onClick={() => setView("specs")} secondary>📄 Equipment Specs</Btn>
-                <Btn onClick={() => { loadLogs(); setView("history"); }} secondary>📜 Maintenance History</Btn>
+                <Btn onClick={() => { loadLogs(); setView("history"); }} secondary>📜 {t(lang,"maintenanceHistory")}</Btn>
               </>
             )}
           </div>
-        </>
 
       ) : view === "breakdown" ? (
         <div>
