@@ -619,13 +619,20 @@ export default function AssetPage() {
                       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{b.reported_by} · {fmtDateTime(b.reported_at)}</div>
                       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 10 }}>{b.description}</div>
                       {/* Maintenance can resolve */}
-                      {isMaintenance && b.status !== "Resolved" && (
+                      {isMaintenance && (b.status === "Open" || b.status === "Acknowledged") && (
                         <div style={{ marginTop: 8 }}>
                           {b.status === "Open" && (
                             <Btn small onClick={async () => { await supabase.from("breakdown_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", b.id); setBreakdowns(prev => prev.map(x => x.id===b.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>
                           )}
                           <Btn small onClick={() => { setResolveForm({ breakdown_id: b.id, notes: "", vendor: "", downtime_start: b.downtime_start, reported_by: b.reported_by, description: b.description, severity: b.severity }); setView("resolve"); }} color={C.green}>✅ Resolve Breakdown</Btn>
                         </div>
+                      )}
+                      {b.status === "Pending Supervisor Approval" && isSupervisor && (
+                        <QRApprovalStep record={b} table="breakdown_reports" userRole={userRole} onDone={(updated) => setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x))} />
+                      )}
+                      {b.status === "Pending Operator Confirmation" && (
+                        <QROperatorConfirm record={b} table="breakdown_reports" userRole={userRole} onDone={(updated) => { setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x)); setAsset(prev => ({ ...prev, status: "Operational" })); }} />
+                      )}
                       )}
                     </div>
                   ))}
@@ -644,11 +651,24 @@ export default function AssetPage() {
                       </div>
                       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{i.reported_by} · {fmtDateTime(i.reported_at)}</div>
                       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 10 }}>{i.description}</div>
-                      {isMaintenance && i.status !== "Resolved" && (
+                      {isMaintenance && (i.status === "Open" || i.status === "Acknowledged") && (
                         <div style={{ marginTop: 8 }}>
                           {i.status === "Open" && <Btn small onClick={async () => { await supabase.from("issue_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", i.id); setIssues(prev => prev.map(x => x.id===i.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>}
-                          <Btn small onClick={async () => { await supabase.from("issue_reports").update({ status: "Resolved", resolved_by: userRole?.name, resolved_at: new Date().toISOString() }).eq("id", i.id); if (i.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", i.work_order_id); setIssues(prev => prev.map(x => x.id===i.id?{...x,status:"Resolved"}:x)); setSuccess("Issue resolved!"); }} color={C.green}>✅ Resolve Issue</Btn>
+                          <Btn small onClick={async () => {
+                            const now = new Date().toISOString();
+                            const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
+                            const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
+                            await supabase.from("issue_reports").update({ status: newStatus, resolved_by: userRole?.name, resolved_at: now, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", i.id);
+                            setIssues(prev => prev.map(x => x.id===i.id?{...x,status:newStatus}:x));
+                            setSuccess(isSupervisorOrAdmin ? "Resolved — pending operator confirmation." : "Resolved — pending supervisor approval.");
+                          }} color={C.green}>✅ Resolve Issue</Btn>
                         </div>
+                      )}
+                      {i.status === "Pending Supervisor Approval" && isSupervisor && (
+                        <QRApprovalStep record={i} table="issue_reports" userRole={userRole} onDone={(updated) => setIssues(prev => prev.map(x => x.id===updated.id?updated:x))} extraOnApprove={async () => { if (i.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", i.work_order_id); }} />
+                      )}
+                      {i.status === "Pending Operator Confirmation" && (
+                        <QROperatorConfirm record={i} table="issue_reports" userRole={userRole} onDone={(updated) => setIssues(prev => prev.map(x => x.id===updated.id?updated:x))} />
                       )}
                     </div>
                   ))}
@@ -808,7 +828,74 @@ export default function AssetPage() {
     </div>
   );
 }
+// ─── QR APPROVAL STEPS ────────────────────────────────────────────────────────
+function QRApprovalStep({ record, table, userRole, onDone, extraOnApprove }) {
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
 
+  const approve = async () => {
+    if (!password) { setError("Enter your password to approve"); return; }
+    setSaving(true);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setError("Incorrect password. Please try again."); setSaving(false); return; }
+    const now = new Date().toISOString();
+    await supabase.from(table).update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", record.id);
+    if (extraOnApprove) await extraOnApprove();
+    onDone({ ...record, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 10, padding: 14, marginTop: 10 }}>
+      <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ Pending Supervisor Approval</div>
+      {!show ? (
+        <Btn onClick={() => setShow(true)} color={C.green}>✅ Approve</Btn>
+      ) : (
+        <div>
+          <Input label="Confirm Your Password" value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
+          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
+          <div style={{ marginTop: 10 }}>
+            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QROperatorConfirm({ record, table, userRole, onDone }) {
+  const [saving, setSaving] = useState(false);
+  const isReporter = userRole?.name === record.reported_by;
+
+  const confirm = async () => {
+    setSaving(true);
+    const now = new Date().toISOString();
+    await supabase.from(table).update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", record.id);
+    if (table === "breakdown_reports") {
+      await supabase.from("assets").update({ status: "Operational" }).eq("id", record.asset_id);
+      await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: record.supervisor_approved_by || userRole?.name, approved_at: record.supervisor_approved_at || now, status: "Completed" }).eq("breakdown_id", record.id);
+    } else {
+      await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: record.supervisor_approved_by || userRole?.name, approved_at: record.supervisor_approved_at || now, status: "Completed" }).eq("issue_id", record.id);
+    }
+    onDone({ ...record, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 10, padding: 14, marginTop: 10 }}>
+      <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 Pending Operator Confirmation</div>
+      {isReporter ? (
+        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":"✅ Confirm Equipment is Back to Normal"}</Btn>
+      ) : (
+        <div style={{ fontSize: 12, color: C.muted }}>Awaiting confirmation from {record.reported_by}</div>
+      )}
+    </div>
+  );
+}
 // ─── WORK ORDER CARD ──────────────────────────────────────────────────────────
 function WOCard({ wo, isMaintenance, isSupervisor, onUpdate }) {
   const [expanded, setExpanded] = useState(false);
