@@ -76,6 +76,38 @@ const UpdatesLog = ({ updates }) => (!updates || updates.length === 0) ? null : 
   </div>
 );
 
+// Password re-auth required before any critical status change.
+function PasswordConfirm({ actionLabel, onConfirmed, color, disabled }) {
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [show, setShow] = useState(false);
+
+  const confirm = async () => {
+    if (!password) { setError("Enter your password to confirm"); return; }
+    setSaving(true); setError(null);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setError("Incorrect password. Please try again."); setSaving(false); return; }
+    await onConfirmed();
+    setSaving(false);
+  };
+
+  return !show ? (
+    <Btn onClick={() => setShow(true)} disabled={disabled} color={color || C.green}>{actionLabel}</Btn>
+  ) : (
+    <div>
+      <Input label="Confirm Your Password" value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
+      {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <Btn onClick={confirm} disabled={saving||!password} color={color || C.green}>{saving?"Verifying...":actionLabel}</Btn>
+        <Btn secondary onClick={() => { setShow(false); setPassword(""); }}>Cancel</Btn>
+      </div>
+    </div>
+  );
+}
+
 const SectionHeader = ({ title, onBack }) => (
   <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
     <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, cursor: "pointer", padding: "8px 12px", fontSize: 16 }}>←</button>
@@ -235,7 +267,8 @@ export default function AssetPage() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [userRole, setUserRole] = useState(null);
-  const [email, setEmail] = useState("");
+  const [loginMode, setLoginMode] = useState("email"); // "email" | "phone"
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [signing, setSigning] = useState(false);
   const [view, setView] = useState("home");
@@ -322,11 +355,13 @@ export default function AssetPage() {
   };
 
   const signIn = async () => {
+    if (!identifier || !password) { setError("Please fill all fields."); return; }
     setSigning(true);
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+    const loginEmail = loginMode === "phone" ? `${identifier.replace(/\D/g,"")}@facility-command.local` : identifier;
+    const { error: err } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
     if (err) { setError(err.message); setSigning(false); return; }
-    const { data } = await supabase.from("user_roles").select("*").eq("email", email).single();
-    setUserRole(data || { role: "operations", name: email });
+    const { data } = await supabase.from("user_roles").select("*").eq("email", loginEmail).single();
+    setUserRole(data || { role: "operations", name: loginEmail });
     if (data?.language) setLang(data.language);
     loadVendors();
     setSigning(false);
@@ -414,9 +449,14 @@ export default function AssetPage() {
   const [resolveForm, setResolveForm] = useState({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
   const rf = (k) => (v) => setResolveForm(p => ({ ...p, [k]: v }));
 
-  const submitResolve = async () => {
+  const [resolveConfirming, setResolveConfirming] = useState(false);
+  const tryProceedResolve = () => {
     if (!resolveForm.notes || !resolveForm.breakdown_id) { setError("Please fill all fields."); return; }
-    setSaving(true);
+    setError(null);
+    setResolveConfirming(true);
+  };
+
+  const submitResolve = async () => {
     const now = new Date().toISOString();
     const downtimeStartTs = resolveForm.downtime_start;
     const mins = downtimeStartTs ? Math.round((new Date(now) - new Date(downtimeStartTs.endsWith("Z") ? downtimeStartTs : downtimeStartTs+"Z")) / (1000*60)) : null;
@@ -447,7 +487,7 @@ export default function AssetPage() {
     setBreakdowns(prev => prev.map(b => b.id===resolveForm.breakdown_id?{...b,status:newStatus}:b));
     setView("breakdowns");
     setResolveForm({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
-    setSaving(false);
+    setResolveConfirming(false);
   };
 
   // ─── Maintenance Log Form ─────────────────────────────────────────────────
@@ -561,8 +601,15 @@ export default function AssetPage() {
       {!userRole ? (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 16 }}>Sign in to continue</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            {["email","phone"].map(m => (
+              <button key={m} onClick={() => { setLoginMode(m); setIdentifier(""); }} style={{ flex: 1, background: loginMode===m?C.accent:C.surface, color: loginMode===m?"#fff":C.muted, border: `1px solid ${loginMode===m?C.accent:C.border}`, borderRadius: 6, padding: "8px", fontSize: 13, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" }}>{m}</button>
+            ))}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
-            <Input label="Email" value={email} onChange={setEmail} type="email" />
+            {loginMode === "phone"
+              ? <Input label="Phone" value={identifier} onChange={setIdentifier} type="tel" placeholder="01012345678" />
+              : <Input label="Email" value={identifier} onChange={setIdentifier} type="email" />}
             <Input label="Password" value={password} onChange={setPassword} type="password" />
           </div>
           <Btn onClick={signIn} disabled={signing}>{signing ? "Signing in..." : "Sign In"}</Btn>
@@ -741,14 +788,14 @@ export default function AssetPage() {
                       {isMaintenance && (i.status === "Open" || i.status === "Acknowledged") && (
                         <div style={{ marginTop: 8 }}>
                           {i.status === "Open" && <Btn small onClick={async () => { await supabase.from("issue_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", i.id); setIssues(prev => prev.map(x => x.id===i.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>}
-                          <Btn small onClick={async () => {
+                          <PasswordConfirm actionLabel="✅ Resolve Issue" color={C.green} onConfirmed={async () => {
                             const now = new Date().toISOString();
                             const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
                             const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
                             await supabase.from("issue_reports").update({ status: newStatus, resolved_by: userRole?.name, resolved_at: now, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", i.id);
                             setIssues(prev => prev.map(x => x.id===i.id?{...x,status:newStatus}:x));
                             setSuccess(isSupervisorOrAdmin ? "Resolved — pending operator confirmation." : "Resolved — pending supervisor approval.");
-                          }} color={C.green}>✅ Resolve Issue</Btn>
+                          }} />
                         </div>
                       )}
                       {i.status === "Pending Supervisor Approval" && isSupervisor && (
@@ -767,14 +814,18 @@ export default function AssetPage() {
 
       ) : view === "resolve" ? (
         <div>
-          <SectionHeader title="✅ Resolve Breakdown" onBack={() => setView("breakdowns")} />
+          <SectionHeader title="✅ Resolve Breakdown" onBack={() => { setResolveConfirming(false); setView("breakdowns"); }} />
           <div style={{ background: C.card, border: `1px solid ${C.green}44`, borderRadius: 12, padding: 20 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <Textarea label="Maintenance Notes *" value={resolveForm.notes} onChange={rf("notes")} placeholder="Root cause, what was done, parts replaced?" />
               <Sel label="Vendor / Contractor Used" value={resolveForm.vendor} onChange={rf("vendor")} options={vendorOptions} />
             </div>
             <div style={{ marginTop: 16 }}>
-              <Btn onClick={submitResolve} disabled={saving} color={C.green}>{saving ? "Resolving..." : "✅ Mark as Resolved"}</Btn>
+              {resolveConfirming ? (
+                <PasswordConfirm actionLabel="✅ Mark as Resolved" onConfirmed={submitResolve} color={C.green} />
+              ) : (
+                <Btn onClick={tryProceedResolve} color={C.green}>✅ Mark as Resolved</Btn>
+              )}
             </div>
           </div>
         </div>
@@ -917,49 +968,25 @@ export default function AssetPage() {
 }
 // ─── QR APPROVAL STEPS ────────────────────────────────────────────────────────
 function QRApprovalStep({ record, table, userRole, onDone, extraOnApprove }) {
-  const [password, setPassword] = useState("");
-  const [show, setShow] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-
   const approve = async () => {
-    if (!password) { setError("Enter your password to approve"); return; }
-    setSaving(true);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const email = sessionData?.session?.user?.email;
-    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
-    if (authErr) { setError("Incorrect password. Please try again."); setSaving(false); return; }
     const now = new Date().toISOString();
     await supabase.from(table).update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", record.id);
     if (extraOnApprove) await extraOnApprove();
     onDone({ ...record, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
-    setSaving(false);
   };
 
   return (
     <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 10, padding: 14, marginTop: 10 }}>
       <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ Pending Supervisor Approval</div>
-      {!show ? (
-        <Btn onClick={() => setShow(true)} color={C.green}>✅ Approve</Btn>
-      ) : (
-        <div>
-          <Input label="Confirm Your Password" value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
-          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
-          <div style={{ marginTop: 10 }}>
-            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
-          </div>
-        </div>
-      )}
+      <PasswordConfirm actionLabel="✓ Confirm & Approve" onConfirmed={approve} />
     </div>
   );
 }
 
 function QROperatorConfirm({ record, table, userRole, onDone }) {
-  const [saving, setSaving] = useState(false);
   const isReporter = userRole?.name === record.reported_by;
 
   const confirm = async () => {
-    setSaving(true);
     const now = new Date().toISOString();
     await supabase.from(table).update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", record.id);
     if (table === "breakdown_reports") {
@@ -969,14 +996,13 @@ function QROperatorConfirm({ record, table, userRole, onDone }) {
       await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: record.supervisor_approved_by || userRole?.name, approved_at: record.supervisor_approved_at || now, status: "Completed" }).eq("issue_id", record.id);
     }
     onDone({ ...record, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
-    setSaving(false);
   };
 
   return (
     <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 10, padding: 14, marginTop: 10 }}>
       <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 Pending Operator Confirmation</div>
       {isReporter ? (
-        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":"✅ Confirm Equipment is Back to Normal"}</Btn>
+        <PasswordConfirm actionLabel="✅ Confirm Equipment is Back to Normal" onConfirmed={confirm} />
       ) : (
         <div style={{ fontSize: 12, color: C.muted }}>Awaiting confirmation from {record.reported_by}</div>
       )}

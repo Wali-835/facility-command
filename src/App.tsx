@@ -359,19 +359,55 @@ const UpdatesLog = ({ updates, lang }) => (!updates || updates.length === 0) ? n
   </div>
 );
 
+// ─── PASSWORD RE-AUTH (required before any critical status change) ───────────
+function PasswordConfirm({ lang, actionLabel, onConfirmed, color = C.green, disabled }) {
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [show, setShow] = useState(false);
+
+  const confirm = async () => {
+    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
+    setSaving(true); setError(null);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
+    await onConfirmed();
+    setSaving(false);
+  };
+
+  return !show ? (
+    <Btn onClick={() => setShow(true)} disabled={disabled} color={color}>{actionLabel}</Btn>
+  ) : (
+    <div>
+      <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
+      {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <Btn onClick={confirm} disabled={saving||!password} color={color}>{saving?"Verifying...":actionLabel}</Btn>
+        <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
+      </div>
+    </div>
+  );
+}
+
 // ─── BREAKDOWN RESOLUTION MODAL ───────────────────────────────────────────────
 function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolved, lang }) {
   const [form, setForm] = useState({ resolved_by: userRole.name || "", maintenance_notes: "", vendor: "" });
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [confirming, setConfirming] = useState(false);
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
   const downtimeMins = minutesBetween(breakdown.downtime_start, new Date().toISOString());
 
-  const submit = async () => {
+  const tryProceed = () => {
     if (!form.resolved_by) { setError(t(lang,"yourName")); return; }
     if (!form.maintenance_notes) { setError(t(lang,"maintenanceNotes")); return; }
-    setSaving(true); setError(null);
+    setError(null);
+    setConfirming(true);
+  };
+
+  const submit = async () => {
     const now = new Date().toISOString();
     const hours = minutesBetween(breakdown.downtime_start, now);
     const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
@@ -385,7 +421,6 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
     onResolved({ ...breakdown, status: "Resolved", downtime_end: now, downtime_hours: hours });
     onClose();
-    setSaving(false);
   };
 
   return (
@@ -412,9 +447,15 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
               ✅ {t(lang,"operationalStatus")} · {new Date().toLocaleString("en-GB")}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
-            <Btn onClick={submit} disabled={saving} color={C.green}>{saving ? t(lang,"resolving") : `✅ ${t(lang,"markResolved")}`}</Btn>
-            <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+          <div style={{ marginTop: 20 }}>
+            {confirming ? (
+              <PasswordConfirm lang={lang} actionLabel={`✅ ${t(lang,"markResolved")}`} onConfirmed={submit} />
+            ) : (
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={tryProceed} color={C.green}>✅ {t(lang,"markResolved")}</Btn>
+                <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -423,62 +464,35 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
 }
 
 function BreakdownApprovalStep({ breakdown, userRole, lang, onApproved }) {
-  const [password, setPassword] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [show, setShow] = useState(false);
-
   const approve = async () => {
-    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
-    setSaving(true);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const email = sessionData?.session?.user?.email;
-    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
-    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", breakdown.id);
     onApproved({ ...breakdown, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
-    setSaving(false);
   };
-
   return (
     <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
       <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingSupervisorApproval")}</div>
-      {!show ? (
-        <Btn onClick={() => setShow(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
-      ) : (
-        <div>
-          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
-          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
-            <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
-          </div>
-        </div>
-      )}
+      <PasswordConfirm lang={lang} actionLabel="✓ Confirm & Approve" onConfirmed={approve} />
     </div>
   );
 }
 
 function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
-  const [saving, setSaving] = useState(false);
   const isReporter = userRole?.name === breakdown.reported_by;
 
   const confirm = async () => {
-    setSaving(true);
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", breakdown.id);
     await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
     await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: breakdown.supervisor_approved_by || userRole?.name, approved_at: breakdown.supervisor_approved_at || now, status: "Completed" }).eq("breakdown_id", breakdown.id);
     onConfirmed({ ...breakdown, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
-    setSaving(false);
   };
 
   return (
     <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
       <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 {t(lang,"pendingOperatorConfirmation")}</div>
       {isReporter ? (
-        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":t(lang,"operatorConfirm")}</Btn>
+        <PasswordConfirm lang={lang} actionLabel={t(lang,"operatorConfirm")} onConfirmed={confirm} />
       ) : (
         <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"awaitingYourConfirmation")} ({breakdown.reported_by})</div>
       )}
@@ -487,61 +501,34 @@ function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
 }
 
 function IssueApprovalStep({ issue, userRole, lang, onApproved }) {
-  const [password, setPassword] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [show, setShow] = useState(false);
-
   const approve = async () => {
-    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
-    setSaving(true);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const email = sessionData?.session?.user?.email;
-    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
-    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
     const now = new Date().toISOString();
     await supabase.from("issue_reports").update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", issue.id);
     if (issue.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
     onApproved({ ...issue, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
-    setSaving(false);
   };
-
   return (
     <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
       <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingSupervisorApproval")}</div>
-      {!show ? (
-        <Btn onClick={() => setShow(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
-      ) : (
-        <div>
-          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
-          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
-            <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
-          </div>
-        </div>
-      )}
+      <PasswordConfirm lang={lang} actionLabel="✓ Confirm & Approve" onConfirmed={approve} />
     </div>
   );
 }
 
 function IssueOperatorConfirm({ issue, userRole, lang, onConfirmed }) {
-  const [saving, setSaving] = useState(false);
   const isReporter = userRole?.name === issue.reported_by;
 
   const confirm = async () => {
-    setSaving(true);
     const now = new Date().toISOString();
     await supabase.from("issue_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", issue.id);
     onConfirmed({ ...issue, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
-    setSaving(false);
   };
 
   return (
     <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
       <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 {t(lang,"pendingOperatorConfirmation")}</div>
       {isReporter ? (
-        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":t(lang,"operatorConfirm")}</Btn>
+        <PasswordConfirm lang={lang} actionLabel={t(lang,"operatorConfirm")} onConfirmed={confirm} />
       ) : (
         <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"awaitingYourConfirmation")} ({issue.reported_by})</div>
       )}
@@ -889,7 +876,7 @@ const onIssueReported = (record) => {
                   {(issue.status === "Open" || issue.status === "Acknowledged") && (userRole.role === "maintenance" || userRole.role === "admin") && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {issue.status === "Open" && <Btn onClick={() => acknowledgeIssue(issue)} color={C.blue}>{t(lang,"acknowledge")}</Btn>}
-                      <Btn onClick={() => resolveIssue(issue)} color={C.green}>{t(lang,"markResolved")}</Btn>
+                      <PasswordConfirm lang={lang} actionLabel={t(lang,"markResolved")} onConfirmed={() => resolveIssue(issue)} />
                     </div>
                   )}
                 </div>
@@ -1425,11 +1412,13 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
 }
 
 function LoginScreen({ lang }) {
-  const [email, setEmail] = useState(""); const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("email"); // "email" | "phone"
+  const [identifier, setIdentifier] = useState(""); const [password, setPassword] = useState("");
   const [error, setError] = useState(null); const [loading, setLoading] = useState(false);
   const signIn = async () => {
-    if (!email || !password) { setError(t(lang,"enterEmail")); return; }
+    if (!identifier || !password) { setError(t(lang,"enterEmail")); return; }
     setLoading(true); setError(null);
+    const email = mode === "phone" ? `${identifier.replace(/\D/g,"")}@facility-command.local` : identifier;
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
     if (err) setError(err.message);
     setLoading(false);
@@ -1445,8 +1434,17 @@ function LoginScreen({ lang }) {
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 20 }}>{t(lang,"qrSignIn")}</div>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            {["email","phone"].map(m => (
+              <button key={m} onClick={() => { setMode(m); setIdentifier(""); }} style={{ flex: 1, background: mode===m?C.accent:C.surface, color: mode===m?"#fff":C.muted, border: `1px solid ${mode===m?C.accent:C.border}`, borderRadius: 6, padding: "8px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                {m==="email"?t(lang,"email"):t(lang,"phone")}
+              </button>
+            ))}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Input label={t(lang,"enterEmail")} value={email} onChange={setEmail} type="email" />
+            {mode === "phone"
+              ? <Input label={t(lang,"phone")} value={identifier} onChange={setIdentifier} type="tel" placeholder="01012345678" />
+              : <Input label={t(lang,"enterEmail")} value={identifier} onChange={setIdentifier} type="email" />}
             <Input label={t(lang,"enterPassword")} value={password} onChange={setPassword} type="password" />
             <button onClick={signIn} disabled={loading} style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 6, padding: "12px", fontSize: 15, fontWeight: 700, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1 }}>
               {loading ? t(lang,"signingIn") : t(lang,"signIn")}
@@ -3548,11 +3546,12 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors, onJumpToBr
 
   const isInScope = (log) => {
     if (isAdmin) return true;
-    const asset = (assets||[]).find(a => a.name === log.asset_name);
+    const asset = (assets||[]).find(a => a.id === log.asset_id) || (assets||[]).find(a => a.name === log.asset_name);
     const site = asset?.location;
-    // We don't have category on the log directly, try to infer from related WO — fallback: in scope if no restriction set
+    const category = asset?.category;
     const siteMatch = !supervisedSites?.length || (site && supervisedSites.includes(site));
-    return siteMatch; // category checked separately when available
+    const categoryMatch = !supervisedCategories?.length || (category && supervisedCategories.includes(category));
+    return siteMatch && categoryMatch;
   };
 
   const inScopeLogs = logs.filter(isInScope);
@@ -3638,17 +3637,54 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors, onJumpToBr
 }
 function UserManagement({ lang, sites }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
-  const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
+  const [identifierType, setIdentifierType] = useState("email"); // "email" | "phone"
+  const [form, setForm] = useState({ email: "", phone: "", password: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+  const resetForm = () => { setForm({ email: "", phone: "", password: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] }); setIdentifierType("email"); };
 
   useEffect(() => { loadUsers(); }, []);
   const loadUsers = async () => { setLoading(true); const { data } = await supabase.from("user_roles").select("*").order("name"); setUsers(data||[]); setLoading(false); };
+
   const submit = async () => {
-    if (!form.email||!form.name) { setError(t(lang,"email")); return; }
+    if (!form.name) { setError(t(lang,"fullName")); return; }
+    if (identifierType === "email" && !form.email) { setError(t(lang,"email")); return; }
+    if (identifierType === "phone" && !form.phone) { setError(t(lang,"phone")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("USR"), email: form.email, name: form.name, role: form.role, site: form.site||null, supervised_sites: form.role==="supervisor" ? (form.supervised_sites.length?form.supervised_sites:null) : null, supervised_categories: form.role==="supervisor" ? (form.supervised_categories.length?form.supervised_categories:null) : null };
-    const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
-    if (err) { setError(err.message); } else { setSuccess("✓"); setForm({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] }); setShowForm(false); loadUsers(); }
+    const scopedSites = form.role==="supervisor" ? (form.supervised_sites.length?form.supervised_sites:null) : null;
+    const scopedCategories = form.role==="supervisor" ? (form.supervised_categories.length?form.supervised_categories:null) : null;
+
+    if (form.password) {
+      // Brand-new login — must go through the Edge Function since only it holds the service-role key.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      try {
+        const res = await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          body: JSON.stringify({
+            email: identifierType === "email" ? form.email : null,
+            phone: identifierType === "phone" ? form.phone : null,
+            password: form.password, name: form.name, role: form.role, site: form.site || null,
+            supervised_sites: scopedSites, supervised_categories: scopedCategories,
+          }),
+        });
+        const result = await res.json();
+        if (!res.ok) { setError(result.error || "Failed to create account."); setSaving(false); return; }
+      } catch { setError("Failed to reach account creation service."); setSaving(false); return; }
+    } else {
+      // No password — just updating an existing account's role/permissions.
+      let record;
+      if (identifierType === "phone") {
+        const existing = users.find(u => u.phone === form.phone);
+        if (!existing) { setError(t(lang,"noAccountForPhone")); setSaving(false); return; }
+        record = { ...existing, name: form.name, role: form.role, site: form.site||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+      } else {
+        record = { id: uid("USR"), email: form.email, phone: form.phone||null, name: form.name, role: form.role, site: form.site||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+      }
+      const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
+      if (err) { setError(err.message); setSaving(false); return; }
+    }
+    setSuccess("✓"); resetForm(); setShowForm(false); loadUsers();
     setSaving(false);
   };
   const deleteUser = async (id) => { await supabase.from("user_roles").delete().eq("id",id); setUsers(prev => prev.filter(u => u.id!==id)); };
@@ -3678,11 +3714,27 @@ function UserManagement({ lang, sites }) {
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"addUpdateUser")}</div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"identifierType")}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {["email","phone"].map(m => (
+                <button key={m} onClick={() => setIdentifierType(m)} style={{ background: identifierType===m?C.accent:C.surface, color: identifierType===m?"#fff":C.muted, border: `1px solid ${identifierType===m?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  {m==="email"?t(lang,"email"):t(lang,"phone")}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />
+            {identifierType === "phone"
+              ? <Input label={t(lang,"phone")} value={form.phone} onChange={f("phone")} type="tel" placeholder="01012345678" />
+              : <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />}
             <Input label={t(lang,"fullName")} value={form.name} onChange={f("name")} />
             <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","supervisor","admin"]} />
             <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...sites.filter(s => s !== "— Select Site —")]} />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Input label={t(lang,"password")} value={form.password} onChange={f("password")} type="password" />
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{t(lang,"newAccountPasswordHint")}</div>
           </div>
           {form.role === "supervisor" && (
             <div style={{ marginTop: 14, background: C.surface, border: `1px solid ${C.purple}33`, borderRadius: 8, padding: 14 }}>
@@ -3719,8 +3771,8 @@ function UserManagement({ lang, sites }) {
             </div>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"saveUser")}</Btn>
-            <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+            <Btn onClick={submit} disabled={saving}>{saving?(form.password?t(lang,"creatingAccount"):t(lang,"saving")):t(lang,"saveUser")}</Btn>
+            <Btn variant="secondary" onClick={() => { setShowForm(false); resetForm(); }}>{t(lang,"cancel")}</Btn>
           </div>
         </div>
       )}
@@ -3729,7 +3781,7 @@ function UserManagement({ lang, sites }) {
           {users.map(u => (
             <div key={u.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                <div><div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.email}</div></div>
+                <div><div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.phone ? `📱 ${u.phone}` : u.email}</div></div>
                 <span style={{ background: roleColor(u.role)+"22", color: roleColor(u.role), border: `1px solid ${roleColor(u.role)}44`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon(u.role)} {u.role}</span>
               </div>
               {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>📍 {u.site}</div>}
