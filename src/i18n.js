@@ -68,6 +68,13 @@ export const translations = {
     reporting: "Reporting...",
     breakdownReported: "Breakdown reported! Maintenance team has been notified.",
     breakdownResolved: "Breakdown resolved! Equipment is back to operation.",
+    assetHasOpenReport: "This asset already has an open breakdown or issue. Add an update to it instead of filing a new report.",
+    alreadyReportedTag: "⚠ already reported",
+    addUpdateNote: "Update Note *",
+    addUpdateNotePlaceholder: "What's new — status, findings, parts ordered...",
+    updatesLog: "Updates",
+    noUpdatesYet: "No updates yet.",
+    goToBreakdownsTab: "Go to Breakdowns & Issues →",
 
     // Work Orders
     newWorkOrder: "+ New Work Order",
@@ -463,6 +470,13 @@ breakdownsAndIssues: "Breakdowns & Issues",
     reporting: "جارٍ الإبلاغ...",
     breakdownReported: "تم الإبلاغ عن العطل! تم إخطار فريق الصيانة.",
     breakdownResolved: "تم حل العطل! المعدة عادت للتشغيل.",
+    assetHasOpenReport: "هذه المعدة لديها بالفعل عطل أو مشكلة مفتوحة. أضف تحديثًا بدلاً من تقديم بلاغ جديد.",
+    alreadyReportedTag: "⚠ تم الإبلاغ عنه بالفعل",
+    addUpdateNote: "ملاحظة التحديث *",
+    addUpdateNotePlaceholder: "ما الجديد — الحالة، النتائج، قطع الغيار المطلوبة...",
+    updatesLog: "التحديثات",
+    noUpdatesYet: "لا توجد تحديثات بعد.",
+    goToBreakdownsTab: "الذهاب إلى الأعطال والمشاكل ←",
 
     // Work Orders
     newWorkOrder: "+ أمر عمل جديد",

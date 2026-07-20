@@ -62,6 +62,20 @@ const Banner = ({ msg, color, onDismiss }) => msg ? (
   </div>
 ) : null;
 
+const UpdatesLog = ({ updates }) => (!updates || updates.length === 0) ? null : (
+  <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+    <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>📝 Updates</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {updates.map((u,i) => (
+        <div key={i} style={{ fontSize: 12, color: C.subtle }}>
+          <span style={{ color: C.text, fontWeight: 600 }}>{u.by}</span> · <span style={{ color: C.muted }}>{fmtDateTime(u.at)}</span>
+          <div style={{ marginTop: 2 }}>{u.note}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 const SectionHeader = ({ title, onBack }) => (
   <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
     <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, cursor: "pointer", padding: "8px 12px", fontSize: 16 }}>←</button>
@@ -234,6 +248,8 @@ export default function AssetPage() {
   const [workOrders, setWorkOrders] = useState([]);
   const [loadingBreakdowns, setLoadingBreakdowns] = useState(false);
   const [catalogParts, setCatalogParts] = useState([]);
+  const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
+  const [updateNote, setUpdateNote] = useState("");
 
   const assetId = new URLSearchParams(window.location.search).get("asset");
 
@@ -246,6 +262,7 @@ export default function AssetPage() {
   useEffect(() => {
     if (!assetId) { setError("No asset ID in URL."); setLoading(false); return; }
     loadAsset();
+    loadBreakdownsAndIssues();
   }, [assetId]);
 
   useEffect(() => {
@@ -331,6 +348,7 @@ export default function AssetPage() {
 
   const submitBreakdown = async () => {
     if (!brkForm.description || !brkForm.reported_by) { setError("Please fill all fields."); return; }
+    if (openBreakdowns.length > 0 || openIssues.length > 0) { setError(t(lang,"assetHasOpenReport")); return; }
     setSaving(true);
     const now = new Date().toISOString();
     const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: brkForm.reported_by, reported_at: now, downtime_start: now, description: brkForm.description, severity: brkForm.severity, status: "Open" };
@@ -356,6 +374,7 @@ export default function AssetPage() {
 
   const submitIssue = async () => {
     if (!issForm.description || !issForm.reported_by) { setError("Please fill all fields."); return; }
+    if (openBreakdowns.length > 0 || openIssues.length > 0) { setError(t(lang,"assetHasOpenReport")); return; }
     setSaving(true);
     const now = new Date().toISOString();
     const issueId = uid("ISS");
@@ -371,6 +390,23 @@ export default function AssetPage() {
       setView("home");
       setIssForm({ reported_by: "", severity: "Medium", description: "" });
     } else { setError(err.message); }
+    setSaving(false);
+  };
+
+  // ─── Add Update (append a note to an already-open breakdown/issue) ────────
+  const submitUpdate = async () => {
+    if (!updateNote.trim() || !updateTarget) { setError("Please enter an update note."); return; }
+    setSaving(true);
+    const entry = { note: updateNote.trim(), by: userRole?.name || "—", at: new Date().toISOString() };
+    const newUpdates = [...(updateTarget.item.updates||[]), entry];
+    const { error: err } = await supabase.from(updateTarget.table).update({ updates: newUpdates }).eq("id", updateTarget.item.id);
+    if (err) { setError(err.message); setSaving(false); return; }
+    if (updateTarget.table === "breakdown_reports") setBreakdowns(prev => prev.map(x => x.id===updateTarget.item.id?{...x,updates:newUpdates}:x));
+    else setIssues(prev => prev.map(x => x.id===updateTarget.item.id?{...x,updates:newUpdates}:x));
+    setSuccess("Update added.");
+    setUpdateTarget(null);
+    setUpdateNote("");
+    setView("home");
     setSaving(false);
   };
 
@@ -495,6 +531,8 @@ export default function AssetPage() {
   const vendorOptions = ["— None —", ...vendors.map(v => v.name)];
   const openBreakdowns = breakdowns.filter(b => b.status !== "Resolved");
   const openIssues = issues.filter(i => i.status !== "Resolved");
+  // This asset can have at most one open breakdown or issue at a time.
+  const firstOpenReport = openBreakdowns.length ? { item: openBreakdowns[0], table: "breakdown_reports" } : openIssues.length ? { item: openIssues[0], table: "issue_reports" } : null;
   const activeWOs = workOrders.filter(w => w.status !== "Completed");
 
   return (
@@ -550,11 +588,22 @@ export default function AssetPage() {
             </div>
           )}
 
+          {firstOpenReport && (
+            <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: C.yellow }}>
+              ⚠️ {t(lang,"assetHasOpenReport")}
+            </div>
+          )}
           {/* Action Buttons */}
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {/* Everyone can report */}
-            <Btn onClick={() => setView("breakdown")} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
-            <Btn onClick={() => setView("issue")} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
+            {/* Everyone can report — unless there's already an open item, in which case they add an update to it */}
+            {firstOpenReport ? (
+              <Btn onClick={() => { setUpdateTarget(firstOpenReport); setView("add-update"); }} color={C.blue}>📝 {t(lang,"addUpdate")}</Btn>
+            ) : (
+              <>
+                <Btn onClick={() => setView("breakdown")} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
+                <Btn onClick={() => setView("issue")} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
+              </>
+            )}
 
             {/* Operations: view open breakdowns/issues */}
             {isOperations && (
@@ -617,6 +666,21 @@ export default function AssetPage() {
           </div>
         </div>
 
+      ) : view === "add-update" ? (
+        <div>
+          <SectionHeader title={`📝 ${t(lang,"addUpdate")}`} onBack={() => { setUpdateTarget(null); setView("home"); }} />
+          {updateTarget && (
+            <div style={{ background: C.card, border: `1px solid ${C.blue}44`, borderRadius: 12, padding: 20 }}>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>{updateTarget.item.asset_name} · {updateTarget.item.status}</div>
+              <UpdatesLog updates={updateTarget.item.updates} />
+              <Textarea label={t(lang,"addUpdateNote")} value={updateNote} onChange={setUpdateNote} placeholder={t(lang,"addUpdateNotePlaceholder")} />
+              <div style={{ marginTop: 16 }}>
+                <Btn onClick={submitUpdate} disabled={saving} color={C.blue}>{saving ? "Saving..." : t(lang,"addUpdate")}</Btn>
+              </div>
+            </div>
+          )}
+        </div>
+
       ) : view === "breakdowns" ? (
         <div>
           <SectionHeader title="🚨 Breakdowns & Issues" onBack={() => setView("home")} />
@@ -634,6 +698,10 @@ export default function AssetPage() {
                       </div>
                       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{b.reported_by} · {fmtDateTime(b.reported_at)}</div>
                       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 10 }}>{b.description}</div>
+                      <UpdatesLog updates={b.updates} />
+                      {b.status !== "Resolved" && (
+                        <Btn small secondary onClick={() => { setUpdateTarget({ item: b, table: "breakdown_reports" }); setUpdateNote(""); setView("add-update"); }}>📝 {t(lang,"addUpdate")}</Btn>
+                      )}
                       {/* Maintenance can resolve */}
                       {isMaintenance && (b.status === "Open" || b.status === "Acknowledged") && (
                         <div style={{ marginTop: 8 }}>
@@ -666,6 +734,10 @@ export default function AssetPage() {
                       </div>
                       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{i.reported_by} · {fmtDateTime(i.reported_at)}</div>
                       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 10 }}>{i.description}</div>
+                      <UpdatesLog updates={i.updates} />
+                      {i.status !== "Resolved" && (
+                        <Btn small secondary onClick={() => { setUpdateTarget({ item: i, table: "issue_reports" }); setUpdateNote(""); setView("add-update"); }}>📝 {t(lang,"addUpdate")}</Btn>
+                      )}
                       {isMaintenance && (i.status === "Open" || i.status === "Acknowledged") && (
                         <div style={{ marginTop: 8 }}>
                           {i.status === "Open" && <Btn small onClick={async () => { await supabase.from("issue_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", i.id); setIssues(prev => prev.map(x => x.id===i.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>}

@@ -308,6 +308,57 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, lang }) {
   );
 }
 
+// ─── ADD UPDATE MODAL (append a note to an already-open breakdown/issue) ──────
+function AddUpdateModal({ item, table, userRole, lang, onClose, onUpdated }) {
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!note.trim()) { setError(t(lang,"addUpdateNote")); return; }
+    setSaving(true); setError(null);
+    const entry = { note: note.trim(), by: userRole?.name || "—", at: new Date().toISOString() };
+    const newUpdates = [...(item.updates||[]), entry];
+    const { error: err } = await supabase.from(table).update({ updates: newUpdates }).eq("id", item.id);
+    if (err) { setError(err.message); setSaving(false); return; }
+    onUpdated({ ...item, updates: newUpdates });
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
+      <div style={{ background: C.card, border: `2px solid ${C.blue}44`, borderRadius: 12, width: "100%", maxWidth: 480 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, background: C.blue+"11" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.blue }}>📝 {t(lang,"addUpdate")}</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{item.asset_name} · {item.status}</div>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <Textarea label={t(lang,"addUpdateNote")} value={note} onChange={setNote} placeholder={t(lang,"addUpdateNotePlaceholder")} />
+          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+            <Btn onClick={submit} disabled={saving} color={C.blue}>{saving ? t(lang,"reporting") : t(lang,"addUpdate")}</Btn>
+            <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const UpdatesLog = ({ updates, lang }) => (!updates || updates.length === 0) ? null : (
+  <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+    <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>📝 {t(lang,"updatesLog")}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {updates.map((u,i) => (
+        <div key={i} style={{ fontSize: 12, color: C.subtle }}>
+          <span style={{ color: C.text, fontWeight: 600 }}>{u.by}</span> · <span style={{ color: C.muted }}>{fmtDateTime(u.at)}</span>
+          <div style={{ marginTop: 2 }}>{u.note}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 // ─── BREAKDOWN RESOLUTION MODAL ───────────────────────────────────────────────
 function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolved, lang }) {
   const [form, setForm] = useState({ resolved_by: userRole.name || "", maintenance_notes: "", vendor: "" });
@@ -512,8 +563,18 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const [activeView, setActiveView] = useState("breakdowns");
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [selectedIssueAsset, setSelectedIssueAsset] = useState(null);
+  const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
 
   useEffect(() => { loadAll(); }, []);
+
+  // An asset can have at most one open (non-Resolved) breakdown or issue at a time.
+  const openReportFor = (assetId) => {
+    const b = breakdowns.find(x => x.asset_id === assetId && x.status !== "Resolved");
+    if (b) return { item: b, table: "breakdown_reports" };
+    const i = issues.find(x => x.asset_id === assetId && x.status !== "Resolved");
+    if (i) return { item: i, table: "issue_reports" };
+    return null;
+  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -616,6 +677,13 @@ const onIssueReported = (record) => {
       {resolveItem && (
         <BreakdownResolveModal breakdown={resolveItem} userRole={userRole} vendors={vendors} lang={lang} onClose={() => setResolveItem(null)} onResolved={onResolved} />
       )}
+      {updateTarget && (
+        <AddUpdateModal item={updateTarget.item} table={updateTarget.table} userRole={userRole} lang={lang} onClose={() => setUpdateTarget(null)}
+          onUpdated={(updated) => {
+            if (updateTarget.table === "breakdown_reports") setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x));
+            else setIssues(prev => { const next = prev.map(x => x.id===updated.id?updated:x); if (setIssuesFromParent) setIssuesFromParent(next); return next; });
+          }} />
+      )}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
 
@@ -638,10 +706,18 @@ const onIssueReported = (record) => {
             <select onChange={e => setSelectedAsset(assets.find(a => a.id === e.target.value) || null)}
               style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 13 }}>
               <option value="">{t(lang,"selectEquipment")}</option>
-              {assets.filter(a => a.status !== "Under Maintenance").map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
+              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location}){openReportFor(a.id) ? ` — ${t(lang,"alreadyReportedTag")}` : ""}</option>)}
             </select>
-            <Btn onClick={() => { if (!selectedAsset) { setError(t(lang,"selectEquipment")); return; } setShowReportForm(true); }} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
+            <Btn onClick={() => {
+              if (!selectedAsset) { setError(t(lang,"selectEquipment")); return; }
+              const existing = openReportFor(selectedAsset.id);
+              if (existing) { setUpdateTarget(existing); return; }
+              setShowReportForm(true);
+            }} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
           </div>
+          {selectedAsset && openReportFor(selectedAsset.id) && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.yellow }}>⚠️ {t(lang,"assetHasOpenReport")}</div>
+          )}
         </div>
         <div style={{ background: C.card, border: `1px solid ${C.yellow}33`, borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>⚠️ {t(lang,"reportEquipmentIssue")}</div>
@@ -650,10 +726,18 @@ const onIssueReported = (record) => {
             <select onChange={e => setSelectedIssueAsset(assets.find(a => a.id === e.target.value) || null)}
               style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 13 }}>
               <option value="">{t(lang,"selectEquipment")}</option>
-              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
+              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location}){openReportFor(a.id) ? ` — ${t(lang,"alreadyReportedTag")}` : ""}</option>)}
             </select>
-            <Btn onClick={() => { if (!selectedIssueAsset) { setError(t(lang,"selectEquipment")); return; } setShowIssueForm(true); }} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
+            <Btn onClick={() => {
+              if (!selectedIssueAsset) { setError(t(lang,"selectEquipment")); return; }
+              const existing = openReportFor(selectedIssueAsset.id);
+              if (existing) { setUpdateTarget(existing); return; }
+              setShowIssueForm(true);
+            }} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
           </div>
+          {selectedIssueAsset && openReportFor(selectedIssueAsset.id) && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.yellow }}>⚠️ {t(lang,"assetHasOpenReport")}</div>
+          )}
         </div>
       </div>
 
@@ -722,6 +806,12 @@ const onIssueReported = (record) => {
                     <strong style={{ color: C.blue }}>🔧 {t(lang,"resolvedBy")} {b.resolved_by}:</strong> {b.maintenance_notes}
                   </div>
                 )}
+                <UpdatesLog updates={b.updates} lang={lang} />
+                {b.status !== "Resolved" && (
+                  <div style={{ marginBottom: 14 }}>
+                    <Btn small variant="secondary" onClick={() => setUpdateTarget({ item: b, table: "breakdown_reports" })}>📝 {t(lang,"addUpdate")}</Btn>
+                  </div>
+                )}
                 {b.status === "Pending Supervisor Approval" && isSupervisor && (
                   <BreakdownApprovalStep breakdown={b} userRole={userRole} lang={lang} onApproved={(updated) => setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x))} />
                 )}
@@ -778,6 +868,12 @@ const onIssueReported = (record) => {
                   </div>
                   {issue.work_order_id && (
                     <div style={{ fontSize: 12, color: C.blue, marginBottom: 12 }}>📋 {t(lang,"workOrders")}: {issue.work_order_id}</div>
+                  )}
+                  <UpdatesLog updates={issue.updates} lang={lang} />
+                  {issue.status !== "Resolved" && (
+                    <div style={{ marginBottom: 12 }}>
+                      <Btn small variant="secondary" onClick={() => setUpdateTarget({ item: issue, table: "issue_reports" })}>📝 {t(lang,"addUpdate")}</Btn>
+                    </div>
                   )}
                   {issue.status === "Pending Supervisor Approval" && isSupervisor && (
                     <IssueApprovalStep issue={issue} userRole={userRole} lang={lang} onApproved={(updated) => setIssues(prev => prev.map(x => x.id===updated.id?updated:x))} />
@@ -3421,7 +3517,7 @@ function MySubmissions({ userRole, lang }) {
     </div>
   );
 }
-function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
+function PendingApprovals({ userRole, isAdmin, lang, assets, vendors, onJumpToBreakdowns }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedLog, setExpandedLog] = useState(null);
@@ -3500,7 +3596,8 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
           )}
           {log.breakdown_id || log.issue_id ? (
             <div style={{ marginTop: 12, background: C.blue+"11", border: `1px solid ${C.blue}33`, borderRadius: 8, padding: 12, fontSize: 12, color: C.blue }}>
-              ℹ️ This log is linked to a {log.breakdown_id ? "breakdown" : "issue"}. Please approve it from the <strong>Breakdowns & Issues</strong> tab so the operator confirmation step isn't skipped.
+              <div style={{ marginBottom: 8 }}>ℹ️ This log is linked to a {log.breakdown_id ? "breakdown" : "issue"}. Approve it from the <strong>Breakdowns & Issues</strong> tab so the operator confirmation step isn't skipped.</div>
+              <Btn small onClick={onJumpToBreakdowns} color={C.blue}>{t(lang,"goToBreakdownsTab")}</Btn>
             </div>
           ) : (isAdmin || !dimmed) && (
             <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={() => setLogs(prev => prev.filter(l => l.id!==log.id))} onRejected={() => setLogs(prev => prev.filter(l => l.id!==log.id))} />
@@ -3836,7 +3933,7 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} />}
-        {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} />}
+        {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
