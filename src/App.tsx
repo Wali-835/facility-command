@@ -1540,8 +1540,12 @@ function WorkOrderPhotosModal({ workOrder, onClose, lang }) {
     </div>
   );
 }
-function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang, vendors, assets }) {
+function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance, userRole, lang, vendors, assets }) {
   const [logs, setLogs] = useState([]);
+  const [actionPlan, setActionPlan] = useState(wo.action_plan || "");
+  const [targetDate, setTargetDate] = useState(wo.target_date || "");
+  const [editingPlan, setEditingPlan] = useState(false);
+  const [savingPlan, setSavingPlan] = useState(false);
   const [parts, setParts] = useState({});
   const [catalogParts, setCatalogParts] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
@@ -1589,6 +1593,13 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
   const toggleLog = (logId) => {
     setExpandedLog(expandedLog===logId?null:logId);
     if (!parts[logId]) loadParts(logId);
+  };
+
+  const savePlan = async () => {
+    setSavingPlan(true); setError(null);
+    const { error: err } = await supabase.from("work_orders").update({ action_plan: actionPlan||null, target_date: targetDate||null }).eq("id", wo.id);
+    if (err) { setError(err.message); } else { setEditingPlan(false); }
+    setSavingPlan(false);
   };
 
   const submitLog = async () => {
@@ -1668,6 +1679,33 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, userRole, lang
         <div style={{ padding: 24 }}>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
           <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+
+          {/* Action Plan */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: editingPlan?12:0 }}>
+              <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>📋 {t(lang,"actionPlan")}</div>
+              {isMaintenance && !editingPlan && (
+                <button onClick={() => setEditingPlan(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12 }}>{t(lang,"edit")}</button>
+              )}
+            </div>
+            {editingPlan ? (
+              <div>
+                <Textarea label={t(lang,"actionPlan")} value={actionPlan} onChange={setActionPlan} placeholder={t(lang,"actionPlanPlaceholder")} />
+                <div style={{ marginTop: 10 }}>
+                  <Input label={t(lang,"targetCompletion")} value={targetDate} onChange={setTargetDate} type="date" />
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <Btn small onClick={savePlan} disabled={savingPlan}>{savingPlan?t(lang,"saving"):t(lang,"save")}</Btn>
+                  <Btn small variant="secondary" onClick={() => { setActionPlan(wo.action_plan||""); setTargetDate(wo.target_date||""); setEditingPlan(false); }}>{t(lang,"cancel")}</Btn>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 13, color: actionPlan?C.subtle:C.muted, marginTop: 8, whiteSpace: "pre-wrap" }}>{actionPlan || "—"}</div>
+                {targetDate && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>🎯 {t(lang,"targetCompletion")}: {fmtDate(targetDate)}</div>}
+              </div>
+            )}
+          </div>
 
           {/* Add Log Button */}
           <div style={{ marginBottom: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1848,11 +1886,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —",...vendors.filter(v => v.status==="Active").map(v => v.name)];
 
-  // Auto-set (and lock) site when a registered asset is selected
+  // Auto-set (and lock) site + category when a registered asset is selected
   const handleAssetSelect = (assetName) => {
-    f("asset")(assetName);
     const found = assets.find(a => a.name === assetName);
-    if (found) f("site")(found.location);
+    setForm(p => ({ ...p, asset: assetName, site: found?.location || p.site, category: found?.category || p.category }));
   };
 
   const toggleManualAsset = () => {
@@ -1913,7 +1950,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
     setSaving(true); setError(null);
     const vendorName = form.vendor === "— None —" || !form.vendor ? null : form.vendor;
     const found = assets.find(a => a.name === form.asset);
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null, action_plan: form.action_plan||null, target_date: form.target_date||null };
+    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: found?.category || form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null, action_plan: form.action_plan||null, target_date: form.target_date||null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
     if (err) { setError(err.message); } else {
       onAdd(record);
@@ -2014,7 +2051,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   return (
     <div>
       {selectedWO && <WorkOrderPhotosModal workOrder={selectedWO} lang={lang} onClose={() => setSelectedWO(null)} />}
-      {logWO && <WOMaintenanceModal wo={logWO} onClose={() => setLogWO(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} userRole={userRole} lang={lang} vendors={vendors} assets={assets} />}
+      {logWO && <WOMaintenanceModal wo={logWO} onClose={() => setLogWO(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} userRole={userRole} lang={lang} vendors={vendors} assets={assets} />}
       {noteItem && (
         <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 460 }}>
@@ -2108,7 +2145,14 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
                 {manualAsset ? t(lang,"chooseFromAssetList") : t(lang,"assetNotInList")}
               </button>
             </div>
-            <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
+            {manualAsset ? (
+              <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
+            ) : (
+              <div>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"categoryFromAsset")}</div>
+                <div style={{ background: C.surface+"88", border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: form.category?C.text:C.muted, fontSize: 14 }}>{form.category || "—"}</div>
+              </div>
+            )}
             {manualAsset ? (
               <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={sites} />
             ) : (
