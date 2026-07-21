@@ -13,7 +13,8 @@ const C = {
   blue: "#3b82f6", purple: "#a855f7", text: "#e2e8f0", muted: "#64748b", subtle: "#94a3b8",
 };
 
-const SITES = [
+// Fallback only — used if the `sites` table hasn't been migrated/seeded yet or fails to load.
+const DEFAULT_SITES = [
   "— Select Site —", "Site1", "Site2", "Site3", "Site4", "Site5", "Site6",
   "Site7B", "Site7C", "Site8", "Site9", "Site9A", "Site9B",
   "Site10", "Site10A", "Site10B", "Site11", "Site12", "Site14", "Site14A", "Site14B", "Storage",
@@ -29,6 +30,8 @@ const SEVERITY_COLORS = { Critical: C.red, High: C.accent, Medium: C.yellow, Low
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 const TODAY = new Date().toISOString().split("T")[0];
 const uid = (p) => `${p}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2,5).toUpperCase()}`;
+// Postgres unique-violation (23505) on assets.serial_number -> friendly message; anything else -> raw DB message.
+const assetDbErrorMessage = (err, lang) => err?.code === "23505" ? t(lang,"duplicateSerialNumber") : err.message;
 const priorityColor = (p) => ({ Critical: C.red, High: C.accent, Medium: C.yellow, Low: C.green }[p] || C.muted);
 const statusColor = (s) => ({
   Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow,
@@ -305,19 +308,106 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, lang }) {
   );
 }
 
+// ─── ADD UPDATE MODAL (append a note to an already-open breakdown/issue) ──────
+function AddUpdateModal({ item, table, userRole, lang, onClose, onUpdated }) {
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!note.trim()) { setError(t(lang,"addUpdateNote")); return; }
+    setSaving(true); setError(null);
+    const entry = { note: note.trim(), by: userRole?.name || "—", at: new Date().toISOString() };
+    const newUpdates = [...(item.updates||[]), entry];
+    const { error: err } = await supabase.from(table).update({ updates: newUpdates }).eq("id", item.id);
+    if (err) { setError(err.message); setSaving(false); return; }
+    onUpdated({ ...item, updates: newUpdates });
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
+      <div style={{ background: C.card, border: `2px solid ${C.blue}44`, borderRadius: 12, width: "100%", maxWidth: 480 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, background: C.blue+"11" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.blue }}>📝 {t(lang,"addUpdate")}</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{item.asset_name} · {item.status}</div>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <Textarea label={t(lang,"addUpdateNote")} value={note} onChange={setNote} placeholder={t(lang,"addUpdateNotePlaceholder")} />
+          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+            <Btn onClick={submit} disabled={saving} color={C.blue}>{saving ? t(lang,"reporting") : t(lang,"addUpdate")}</Btn>
+            <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const UpdatesLog = ({ updates, lang }) => (!updates || updates.length === 0) ? null : (
+  <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+    <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>📝 {t(lang,"updatesLog")}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {updates.map((u,i) => (
+        <div key={i} style={{ fontSize: 12, color: C.subtle }}>
+          <span style={{ color: C.text, fontWeight: 600 }}>{u.by}</span> · <span style={{ color: C.muted }}>{fmtDateTime(u.at)}</span>
+          <div style={{ marginTop: 2 }}>{u.note}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// ─── PASSWORD RE-AUTH (required before any critical status change) ───────────
+function PasswordConfirm({ lang, actionLabel, onConfirmed, color = C.green, disabled }) {
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [show, setShow] = useState(false);
+
+  const confirm = async () => {
+    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
+    setSaving(true); setError(null);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const email = sessionData?.session?.user?.email;
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
+    await onConfirmed();
+    setSaving(false);
+  };
+
+  return !show ? (
+    <Btn onClick={() => setShow(true)} disabled={disabled} color={color}>{actionLabel}</Btn>
+  ) : (
+    <div>
+      <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
+      {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <Btn onClick={confirm} disabled={saving||!password} color={color}>{saving?"Verifying...":actionLabel}</Btn>
+        <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
+      </div>
+    </div>
+  );
+}
+
 // ─── BREAKDOWN RESOLUTION MODAL ───────────────────────────────────────────────
 function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolved, lang }) {
   const [form, setForm] = useState({ resolved_by: userRole.name || "", maintenance_notes: "", vendor: "" });
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [confirming, setConfirming] = useState(false);
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —", ...vendors.filter(v => v.status === "Active").map(v => v.name)];
   const downtimeMins = minutesBetween(breakdown.downtime_start, new Date().toISOString());
 
-  const submit = async () => {
+  const tryProceed = () => {
     if (!form.resolved_by) { setError(t(lang,"yourName")); return; }
     if (!form.maintenance_notes) { setError(t(lang,"maintenanceNotes")); return; }
-    setSaving(true); setError(null);
+    setError(null);
+    setConfirming(true);
+  };
+
+  const submit = async () => {
     const now = new Date().toISOString();
     const hours = minutesBetween(breakdown.downtime_start, now);
     const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
@@ -331,7 +421,6 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
     onResolved({ ...breakdown, status: "Resolved", downtime_end: now, downtime_hours: hours });
     onClose();
-    setSaving(false);
   };
 
   return (
@@ -358,9 +447,15 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
               ✅ {t(lang,"operationalStatus")} · {new Date().toLocaleString("en-GB")}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
-            <Btn onClick={submit} disabled={saving} color={C.green}>{saving ? t(lang,"resolving") : `✅ ${t(lang,"markResolved")}`}</Btn>
-            <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+          <div style={{ marginTop: 20 }}>
+            {confirming ? (
+              <PasswordConfirm lang={lang} actionLabel={`✅ ${t(lang,"markResolved")}`} onConfirmed={submit} />
+            ) : (
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={tryProceed} color={C.green}>✅ {t(lang,"markResolved")}</Btn>
+                <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -369,62 +464,35 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
 }
 
 function BreakdownApprovalStep({ breakdown, userRole, lang, onApproved }) {
-  const [password, setPassword] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [show, setShow] = useState(false);
-
   const approve = async () => {
-    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
-    setSaving(true);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const email = sessionData?.session?.user?.email;
-    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
-    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", breakdown.id);
     onApproved({ ...breakdown, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
-    setSaving(false);
   };
-
   return (
     <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
       <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingSupervisorApproval")}</div>
-      {!show ? (
-        <Btn onClick={() => setShow(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
-      ) : (
-        <div>
-          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
-          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
-            <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
-          </div>
-        </div>
-      )}
+      <PasswordConfirm lang={lang} actionLabel="✓ Confirm & Approve" onConfirmed={approve} />
     </div>
   );
 }
 
 function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
-  const [saving, setSaving] = useState(false);
   const isReporter = userRole?.name === breakdown.reported_by;
 
   const confirm = async () => {
-    setSaving(true);
     const now = new Date().toISOString();
     await supabase.from("breakdown_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", breakdown.id);
     await supabase.from("assets").update({ status: "Operational" }).eq("id", breakdown.asset_id);
     await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: breakdown.supervisor_approved_by || userRole?.name, approved_at: breakdown.supervisor_approved_at || now, status: "Completed" }).eq("breakdown_id", breakdown.id);
     onConfirmed({ ...breakdown, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
-    setSaving(false);
   };
 
   return (
     <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
       <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 {t(lang,"pendingOperatorConfirmation")}</div>
       {isReporter ? (
-        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":t(lang,"operatorConfirm")}</Btn>
+        <PasswordConfirm lang={lang} actionLabel={t(lang,"operatorConfirm")} onConfirmed={confirm} />
       ) : (
         <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"awaitingYourConfirmation")} ({breakdown.reported_by})</div>
       )}
@@ -433,61 +501,34 @@ function BreakdownOperatorConfirm({ breakdown, userRole, lang, onConfirmed }) {
 }
 
 function IssueApprovalStep({ issue, userRole, lang, onApproved }) {
-  const [password, setPassword] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [show, setShow] = useState(false);
-
   const approve = async () => {
-    if (!password) { setError(t(lang,"enterPasswordToApprove")); return; }
-    setSaving(true);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const email = sessionData?.session?.user?.email;
-    const { error: authErr } = await supabase.auth.signInWithPassword({ email, password });
-    if (authErr) { setError(t(lang,"incorrectPassword")); setSaving(false); return; }
     const now = new Date().toISOString();
     await supabase.from("issue_reports").update({ status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now }).eq("id", issue.id);
     if (issue.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
     onApproved({ ...issue, status: "Pending Operator Confirmation", supervisor_approved_by: userRole?.name, supervisor_approved_at: now });
-    setSaving(false);
   };
-
   return (
     <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
       <div style={{ fontSize: 12, color: C.yellow, fontWeight: 700, marginBottom: 10 }}>⏳ {t(lang,"pendingSupervisorApproval")}</div>
-      {!show ? (
-        <Btn onClick={() => setShow(true)} color={C.green}>{t(lang,"approveLog")}</Btn>
-      ) : (
-        <div>
-          <Input label={t(lang,"confirmPassword")} value={password} type="password" onChange={v => { setPassword(v); setError(null); }} />
-          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 6 }}>{error}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <Btn onClick={approve} disabled={saving||!password} color={C.green}>{saving?"Verifying...":"✓ Confirm & Approve"}</Btn>
-            <Btn variant="secondary" onClick={() => { setShow(false); setPassword(""); }}>{t(lang,"cancel")}</Btn>
-          </div>
-        </div>
-      )}
+      <PasswordConfirm lang={lang} actionLabel="✓ Confirm & Approve" onConfirmed={approve} />
     </div>
   );
 }
 
 function IssueOperatorConfirm({ issue, userRole, lang, onConfirmed }) {
-  const [saving, setSaving] = useState(false);
   const isReporter = userRole?.name === issue.reported_by;
 
   const confirm = async () => {
-    setSaving(true);
     const now = new Date().toISOString();
     await supabase.from("issue_reports").update({ status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now }).eq("id", issue.id);
     onConfirmed({ ...issue, status: "Resolved", operator_confirmed_by: userRole?.name, operator_confirmed_at: now });
-    setSaving(false);
   };
 
   return (
     <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
       <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginBottom: 10 }}>👁 {t(lang,"pendingOperatorConfirmation")}</div>
       {isReporter ? (
-        <Btn onClick={confirm} disabled={saving} color={C.green}>{saving?"Confirming...":t(lang,"operatorConfirm")}</Btn>
+        <PasswordConfirm lang={lang} actionLabel={t(lang,"operatorConfirm")} onConfirmed={confirm} />
       ) : (
         <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"awaitingYourConfirmation")} ({issue.reported_by})</div>
       )}
@@ -509,8 +550,18 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const [activeView, setActiveView] = useState("breakdowns");
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [selectedIssueAsset, setSelectedIssueAsset] = useState(null);
+  const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
 
   useEffect(() => { loadAll(); }, []);
+
+  // An asset can have at most one open (non-Resolved) breakdown or issue at a time.
+  const openReportFor = (assetId) => {
+    const b = breakdowns.find(x => x.asset_id === assetId && x.status !== "Resolved");
+    if (b) return { item: b, table: "breakdown_reports" };
+    const i = issues.find(x => x.asset_id === assetId && x.status !== "Resolved");
+    if (i) return { item: i, table: "issue_reports" };
+    return null;
+  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -613,6 +664,13 @@ const onIssueReported = (record) => {
       {resolveItem && (
         <BreakdownResolveModal breakdown={resolveItem} userRole={userRole} vendors={vendors} lang={lang} onClose={() => setResolveItem(null)} onResolved={onResolved} />
       )}
+      {updateTarget && (
+        <AddUpdateModal item={updateTarget.item} table={updateTarget.table} userRole={userRole} lang={lang} onClose={() => setUpdateTarget(null)}
+          onUpdated={(updated) => {
+            if (updateTarget.table === "breakdown_reports") setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x));
+            else setIssues(prev => { const next = prev.map(x => x.id===updated.id?updated:x); if (setIssuesFromParent) setIssuesFromParent(next); return next; });
+          }} />
+      )}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
 
@@ -635,10 +693,18 @@ const onIssueReported = (record) => {
             <select onChange={e => setSelectedAsset(assets.find(a => a.id === e.target.value) || null)}
               style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 13 }}>
               <option value="">{t(lang,"selectEquipment")}</option>
-              {assets.filter(a => a.status !== "Under Maintenance").map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
+              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location}){openReportFor(a.id) ? ` — ${t(lang,"alreadyReportedTag")}` : ""}</option>)}
             </select>
-            <Btn onClick={() => { if (!selectedAsset) { setError(t(lang,"selectEquipment")); return; } setShowReportForm(true); }} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
+            <Btn onClick={() => {
+              if (!selectedAsset) { setError(t(lang,"selectEquipment")); return; }
+              const existing = openReportFor(selectedAsset.id);
+              if (existing) { setUpdateTarget(existing); return; }
+              setShowReportForm(true);
+            }} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
           </div>
+          {selectedAsset && openReportFor(selectedAsset.id) && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.yellow }}>⚠️ {t(lang,"assetHasOpenReport")}</div>
+          )}
         </div>
         <div style={{ background: C.card, border: `1px solid ${C.yellow}33`, borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>⚠️ {t(lang,"reportEquipmentIssue")}</div>
@@ -647,10 +713,18 @@ const onIssueReported = (record) => {
             <select onChange={e => setSelectedIssueAsset(assets.find(a => a.id === e.target.value) || null)}
               style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 13 }}>
               <option value="">{t(lang,"selectEquipment")}</option>
-              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location})</option>)}
+              {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.location}){openReportFor(a.id) ? ` — ${t(lang,"alreadyReportedTag")}` : ""}</option>)}
             </select>
-            <Btn onClick={() => { if (!selectedIssueAsset) { setError(t(lang,"selectEquipment")); return; } setShowIssueForm(true); }} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
+            <Btn onClick={() => {
+              if (!selectedIssueAsset) { setError(t(lang,"selectEquipment")); return; }
+              const existing = openReportFor(selectedIssueAsset.id);
+              if (existing) { setUpdateTarget(existing); return; }
+              setShowIssueForm(true);
+            }} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
           </div>
+          {selectedIssueAsset && openReportFor(selectedIssueAsset.id) && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.yellow }}>⚠️ {t(lang,"assetHasOpenReport")}</div>
+          )}
         </div>
       </div>
 
@@ -719,6 +793,12 @@ const onIssueReported = (record) => {
                     <strong style={{ color: C.blue }}>🔧 {t(lang,"resolvedBy")} {b.resolved_by}:</strong> {b.maintenance_notes}
                   </div>
                 )}
+                <UpdatesLog updates={b.updates} lang={lang} />
+                {b.status !== "Resolved" && (
+                  <div style={{ marginBottom: 14 }}>
+                    <Btn small variant="secondary" onClick={() => setUpdateTarget({ item: b, table: "breakdown_reports" })}>📝 {t(lang,"addUpdate")}</Btn>
+                  </div>
+                )}
                 {b.status === "Pending Supervisor Approval" && isSupervisor && (
                   <BreakdownApprovalStep breakdown={b} userRole={userRole} lang={lang} onApproved={(updated) => setBreakdowns(prev => prev.map(x => x.id===updated.id?updated:x))} />
                 )}
@@ -776,6 +856,12 @@ const onIssueReported = (record) => {
                   {issue.work_order_id && (
                     <div style={{ fontSize: 12, color: C.blue, marginBottom: 12 }}>📋 {t(lang,"workOrders")}: {issue.work_order_id}</div>
                   )}
+                  <UpdatesLog updates={issue.updates} lang={lang} />
+                  {issue.status !== "Resolved" && (
+                    <div style={{ marginBottom: 12 }}>
+                      <Btn small variant="secondary" onClick={() => setUpdateTarget({ item: issue, table: "issue_reports" })}>📝 {t(lang,"addUpdate")}</Btn>
+                    </div>
+                  )}
                   {issue.status === "Pending Supervisor Approval" && isSupervisor && (
                     <IssueApprovalStep issue={issue} userRole={userRole} lang={lang} onApproved={(updated) => setIssues(prev => prev.map(x => x.id===updated.id?updated:x))} />
                   )}
@@ -790,7 +876,7 @@ const onIssueReported = (record) => {
                   {(issue.status === "Open" || issue.status === "Acknowledged") && (userRole.role === "maintenance" || userRole.role === "admin") && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {issue.status === "Open" && <Btn onClick={() => acknowledgeIssue(issue)} color={C.blue}>{t(lang,"acknowledge")}</Btn>}
-                      <Btn onClick={() => resolveIssue(issue)} color={C.green}>{t(lang,"markResolved")}</Btn>
+                      <PasswordConfirm lang={lang} actionLabel={t(lang,"markResolved")} onConfirmed={() => resolveIssue(issue)} />
                     </div>
                   )}
                 </div>
@@ -1326,11 +1412,13 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
 }
 
 function LoginScreen({ lang }) {
-  const [email, setEmail] = useState(""); const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("email"); // "email" | "phone"
+  const [identifier, setIdentifier] = useState(""); const [password, setPassword] = useState("");
   const [error, setError] = useState(null); const [loading, setLoading] = useState(false);
   const signIn = async () => {
-    if (!email || !password) { setError(t(lang,"enterEmail")); return; }
+    if (!identifier || !password) { setError(t(lang,"enterEmail")); return; }
     setLoading(true); setError(null);
+    const email = mode === "phone" ? `${identifier.replace(/\D/g,"")}@facility-command.local` : identifier;
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
     if (err) setError(err.message);
     setLoading(false);
@@ -1346,8 +1434,17 @@ function LoginScreen({ lang }) {
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 20 }}>{t(lang,"qrSignIn")}</div>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            {["email","phone"].map(m => (
+              <button key={m} onClick={() => { setMode(m); setIdentifier(""); }} style={{ flex: 1, background: mode===m?C.accent:C.surface, color: mode===m?"#fff":C.muted, border: `1px solid ${mode===m?C.accent:C.border}`, borderRadius: 6, padding: "8px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                {m==="email"?t(lang,"email"):t(lang,"phone")}
+              </button>
+            ))}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Input label={t(lang,"enterEmail")} value={email} onChange={setEmail} type="email" />
+            {mode === "phone"
+              ? <Input label={t(lang,"phone")} value={identifier} onChange={setIdentifier} type="tel" placeholder="01012345678" />
+              : <Input label={t(lang,"enterEmail")} value={identifier} onChange={setIdentifier} type="email" />}
             <Input label={t(lang,"enterPassword")} value={password} onChange={setPassword} type="password" />
             <button onClick={signIn} disabled={loading} style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 6, padding: "12px", fontSize: 15, fontWeight: 700, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1 }}>
               {loading ? t(lang,"signingIn") : t(lang,"signIn")}
@@ -1713,7 +1810,7 @@ const WO_CATEGORIES = ["MHE","HVAC","Fire Alarm & Suppression","Electrical","Plu
 const WO_STATUSES = ["Open","In Progress","Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled","Completed"];
 const CATEGORY_ICONS = { "MHE":"🏭","HVAC":"❄️","Fire Alarm & Suppression":"🔥","Electrical":"⚡","Plumbing":"🔧","Civil & Structural":"🏗️","Security Systems":"🔒","Lighting":"💡","General Maintenance":"🔨" };
 
-function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupervisor, isMaintenance, vendors, assets, lang, userRole }) {
+function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupervisor, isMaintenance, vendors, assets, lang, userRole, sites }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -1779,7 +1876,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const archivedGroups = siteFilter === "All" ? groupBySite(filteredArchived) : { [siteFilter]: filteredArchived };
 
   // Per-site KPIs
-  const siteKPIs = SITES.filter(s => s !== "— Select Site —").map(site => ({
+  const siteKPIs = sites.filter(s => s !== "— Select Site —").map(site => ({
     site,
     open: workOrders.filter(w => w.site === site && w.status === "Open").length,
     inProgress: workOrders.filter(w => w.site === site && w.status === "In Progress").length,
@@ -1907,7 +2004,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
           </div>
         </div>
       )}
-      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:SITES},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:sites},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
 
@@ -1944,7 +2041,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
             <option value="All">{t(lang,"all")} Sites</option>
-            {SITES.filter(s => s !== "— Select Site —").map(s => <option key={s}>{s}</option>)}
+            {sites.filter(s => s !== "— Select Site —").map(s => <option key={s}>{s}</option>)}
           </select>
           <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
             <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
@@ -1973,7 +2070,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
               </select>
             </div>
             <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
-            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={SITES} />
+            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={sites} />
             <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
             <Input label={t(lang,"dueDate")} value={form.due} onChange={f("due")} type="date" />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
@@ -2042,7 +2139,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
     </div>
   );
 }
-function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
+function AssetEditModal({ data, onSave, onClose, lang, mheModels, sites, error }) {
   const [form, setForm] = useState({ ...data });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const brands = [...new Set(mheModels.map(m => m.brand).filter(Boolean))];
@@ -2066,10 +2163,11 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
     <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 620, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: C.accent, marginBottom: 20, textTransform: "uppercase" }}>{t(lang,"edit")} — {data.name}</div>
+        {error && <div style={{ background: C.red+"22", border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
           <Input label={t(lang,"assetName")} value={form.name||""} onChange={f("name")} />
           <Input label={t(lang,"category")} value={form.category||""} onChange={f("category")} />
-          <Sel label={t(lang,"site")} value={form.location||""} onChange={f("location")} options={SITES} />
+          <Sel label={t(lang,"site")} value={form.location||""} onChange={f("location")} options={sites} />
           <Input label={t(lang,"owner")} value={form.owner||""} onChange={f("owner")} />
           <div>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"brand")}</div>
@@ -2096,6 +2194,9 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
           <Input label={t(lang,"pmFrequency")} value={form.pm_frequency||""} onChange={f("pm_frequency")} />
           <Input label={t(lang,"nextServiceDate")} value={form.next_service||""} onChange={f("next_service")} type="date" />
           <Input label={t(lang,"pmTask")} value={form.pm_task||""} onChange={f("pm_task")} />
+          <Input label={t(lang,"invoiceNumber")} value={form.invoice_number||""} onChange={f("invoice_number")} />
+          <Input label={t(lang,"poNumber")} value={form.po_number||""} onChange={f("po_number")} />
+          <Input label={t(lang,"purchaseDate")} value={form.purchase_date||""} onChange={f("purchase_date")} type="date" />
         </div>
         <div style={{ marginTop: 12 }}>
           <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs||""} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
@@ -2108,7 +2209,7 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels }) {
     </div>
   );
 }
-function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMaintenance, vendors, lang, userRole }) {
+function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMaintenance, vendors, lang, userRole, sites }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
@@ -2131,7 +2232,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
       f("technical_specs")(found.technical_specs || "");
     }
   };
-  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "" });
+  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "", invoice_number: "", po_number: "", purchase_date: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
   const owners = ["All",...new Set(assets.map(a => a.owner).filter(Boolean))];
@@ -2147,10 +2248,11 @@ const filtered = assets.filter(a =>
   const submit = async () => {
     if (!form.name) { setError(t(lang,"assetName")); return; }
     if (form.location==="— Select Site —") { setError(t(lang,"site")); return; }
+    if (form.serial_number && assets.some(a => a.serial_number === form.serial_number)) { setError(t(lang,"duplicateSerialNumber")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, owner: form.owner||null, brand: form.brand||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null };
+    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, owner: form.owner||null, brand: form.brand||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null, invoice_number: form.invoice_number||null, po_number: form.po_number||null, purchase_date: form.purchase_date||null };
     const { error: err } = await supabase.from("assets").insert([record]);
-    if (err) { setError(err.message); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", next_service: "", pm_frequency: "1", pm_task: "" }); setShowForm(false); }
+    if (err) { setError(assetDbErrorMessage(err, lang)); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "", invoice_number: "", po_number: "", purchase_date: "" }); setShowForm(false); }
     setSaving(false);
   };
 
@@ -2164,19 +2266,23 @@ const filtered = assets.filter(a =>
   };
 
   const updateStatus = async (id,val) => { await supabase.from("assets").update({ status: val }).eq("id",id); setAssets(prev => prev.map(a => a.id===id?{...a,status:val}:a)); };
-  const saveEdit = async (updated) => { const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id); if (!err) { setAssets(prev => prev.map(a => a.id===updated.id?updated:a)); setEditItem(null); } else setError(err.message); };
+  const saveEdit = async (updated) => {
+    if (updated.serial_number && assets.some(a => a.id !== updated.id && a.serial_number === updated.serial_number)) { setError(t(lang,"duplicateSerialNumber")); return; }
+    const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id);
+    if (!err) { setAssets(prev => prev.map(a => a.id===updated.id?updated:a)); setEditItem(null); setError(null); } else setError(assetDbErrorMessage(err, lang));
+  };
   const confirmDelete = async () => { await supabase.from("assets").delete().eq("id",deleteItem.id); setAssets(prev => prev.filter(a => a.id!==deleteItem.id)); setDeleteItem(null); };
 
   return (
     <div>
-      {editItem && <AssetEditModal lang={lang} data={editItem} mheModels={mheModels} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <AssetEditModal lang={lang} data={editItem} mheModels={mheModels} sites={sites} error={error} onSave={saveEdit} onClose={() => { setEditItem(null); setError(null); }} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} userRole={userRole} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 18 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t(lang,"searchAssets")} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 12px", color: C.text, fontSize: 13, flex: "1 1 180px" }} />
         <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
-          <option>{t(lang,"all")}</option>{SITES.filter(s => s!=="— Select Site —").map(s => <option key={s}>{s}</option>)}
+          <option>{t(lang,"all")}</option>{sites.filter(s => s!=="— Select Site —").map(s => <option key={s}>{s}</option>)}
         </select>
        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
           {categories.map(c => <option key={c}>{c}</option>)}
@@ -2195,7 +2301,7 @@ const filtered = assets.filter(a =>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label={t(lang,"assetName")} value={form.name} onChange={f("name")} />
             <Input label={t(lang,"category")} value={form.category} onChange={f("category")} />
-            <Sel label={t(lang,"site")} value={form.location} onChange={f("location")} options={SITES} />
+            <Sel label={t(lang,"site")} value={form.location} onChange={f("location")} options={sites} />
             <Input label={t(lang,"owner")} value={form.owner} onChange={f("owner")} placeholder="e.g. EPx Logistics" />
             <div>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"brand")}</div>
@@ -2221,6 +2327,9 @@ const filtered = assets.filter(a =>
             <Input label={t(lang,"nextServiceDate")} value={form.next_service} onChange={f("next_service")} type="date" />
             <Sel label={t(lang,"pmFrequency")} value={form.pm_frequency} onChange={f("pm_frequency")} options={["1","2","3","6","12"]} />
             <Input label={t(lang,"pmTask")} value={form.pm_task} onChange={f("pm_task")} />
+            <Input label={t(lang,"invoiceNumber")} value={form.invoice_number} onChange={f("invoice_number")} />
+            <Input label={t(lang,"poNumber")} value={form.po_number} onChange={f("po_number")} />
+            <Input label={t(lang,"purchaseDate")} value={form.purchase_date} onChange={f("purchase_date")} type="date" />
           </div>
           <div style={{ marginTop: 12 }}>
             <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
@@ -2231,9 +2340,6 @@ const filtered = assets.filter(a =>
           </div>
         </div>
       )}
-          <div style={{ marginTop: 12 }}>
-            <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
-          </div>
       {loading ? <Spinner lang={lang} /> : (
         <div>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{filtered.length} {t(lang,"assetsShown")}</div>
@@ -2245,7 +2351,7 @@ const filtered = assets.filter(a =>
                   <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, marginBottom: 14 }}>
-                  {[[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"brand"),a.brand||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"]].map(([lbl,val]) => (
+                  {[[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"brand"),a.brand||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"],[t(lang,"invoiceNumber"),a.invoice_number||"—"],[t(lang,"poNumber"),a.po_number||"—"],[t(lang,"purchaseDate"),a.purchase_date?fmtDate(a.purchase_date):"—"]].map(([lbl,val]) => (
                     <div key={lbl}><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>{lbl}</div><div style={{ color: C.subtle, marginTop: 2 }}>{val||"—"}</div></div>
                   ))}
                 </div>
@@ -2387,7 +2493,7 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin, lang }) {
   );
 }
 
-function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang }) {
+function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang, sites }) {
   const [generating, setGenerating] = useState(false); const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const pmDueCount = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length;
@@ -2441,12 +2547,12 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang }) {
         </label>
       </div>
 
-      <AnnualPMPlanUpload assets={assets} lang={lang} />
+      <AnnualPMPlanUpload assets={assets} lang={lang} sites={sites} />
     </div>
   );
 }
 
-function AnnualPMPlanUpload({ assets, lang }) {
+function AnnualPMPlanUpload({ assets, lang, sites }) {
   const [importing, setImporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
@@ -2594,7 +2700,7 @@ function AnnualPMPlanUpload({ assets, lang }) {
         <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Upload Plan For Site</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <select value={uploadSite} onChange={e => setUploadSite(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13, minWidth: 160 }}>
-            {SITES.map(s => <option key={s}>{s}</option>)}
+            {sites.map(s => <option key={s}>{s}</option>)}
           </select>
           <label style={{ display: "inline-block", background: C.purple, color: "#fff", borderRadius: 6, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: importing?"not-allowed":"pointer", opacity: importing?0.7:1 }}>
             {importing ? "Importing..." : "📂 Upload Annual Plan"}
@@ -2812,7 +2918,7 @@ function Overview({ workOrders, assets, vendors, lang, isSupervisor }) {
         </div>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>{t(lang,"assetsBySite")}</div>
-          {SITES.filter(s => s!=="— Select Site —").map(site => {
+          {[...new Set(assets.map(a => a.location).filter(Boolean))].sort().map(site => {
             const count=assets.filter(a => a.location===site).length; if (!count) return null;
             const op=assets.filter(a => a.location===site&&a.status==="Operational").length;
             const down=assets.filter(a => a.location===site&&a.status==="Under Maintenance").length;
@@ -3001,7 +3107,7 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
   const activeVendors=vendors.filter(v => v.status==="Active").length; const vendorWOs=vendors.map(v => ({ name: v.name, open: workOrders.filter(w => w.vendor===v.name&&w.status!=="Completed").length, completed: workOrders.filter(w => w.vendor===v.name&&w.status==="Completed").length, rating: v.rating })).filter(v => v.open+v.completed>0).sort((a,b) => (b.open+b.completed)-(a.open+a.completed));
   const totalBreakdowns=breakdowns.length; const resolvedBreakdowns=breakdowns.filter(b => b.status==="Resolved").length; const avgDowntime=resolvedBreakdowns>0?Math.round(breakdowns.filter(b => b.downtime_hours).reduce((s,b) => s+(b.downtime_hours||0),0)/resolvedBreakdowns):0;
   const totalIssues=(issues||[]).length; const resolvedIssues=(issues||[]).filter(i => i.status==="Resolved").length; const openIssues=(issues||[]).filter(i => i.status==="Open").length;
-  const siteData=SITES.filter(s => s!=="— Select Site —").map(site => ({ site, total: assets.filter(a => a.location===site).length, down: assets.filter(a => a.location===site&&a.status==="Under Maintenance").length })).filter(s => s.total>0);
+  const siteData=[...new Set(assets.map(a => a.location).filter(Boolean))].sort().map(site => ({ site, total: assets.filter(a => a.location===site).length, down: assets.filter(a => a.location===site&&a.status==="Under Maintenance").length })).filter(s => s.total>0);
 
   const KpiCard = ({ icon, label, value, sub, color, percent }) => (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, borderLeft: `4px solid ${color}` }}>
@@ -3093,7 +3199,7 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
               <KpiCard icon="📋" label={t(lang,"allIssues")} value={totalIssues} color={C.blue} />
               <KpiCard icon="👁" label={t(lang,"acknowledged")} value={(issues||[]).filter(i=>i.status==="Acknowledged").length} color={C.purple} />
             </div>
-            {breakdowns.length>0 && <BarChart title={t(lang,"breakdownAnalysis")} data={SITES.filter(s => s!=="— Select Site —").map(site => ({ label: site, count: breakdowns.filter(b => b.site===site).length, color: C.red })).filter(s => s.count>0)} labelKey="label" valueKey="count" colorKey="color" />}
+            {breakdowns.length>0 && <BarChart title={t(lang,"breakdownAnalysis")} data={[...new Set(breakdowns.map(b => b.site).filter(Boolean))].sort().map(site => ({ label: site, count: breakdowns.filter(b => b.site===site).length, color: C.red })).filter(s => s.count>0)} labelKey="label" valueKey="count" colorKey="color" />}
           </div>
           <div>
             <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>{t(lang,"vendorPerformance")}</div>
@@ -3409,7 +3515,7 @@ function MySubmissions({ userRole, lang }) {
     </div>
   );
 }
-function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
+function PendingApprovals({ userRole, isAdmin, lang, assets, vendors, onJumpToBreakdowns }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedLog, setExpandedLog] = useState(null);
@@ -3440,11 +3546,12 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
 
   const isInScope = (log) => {
     if (isAdmin) return true;
-    const asset = (assets||[]).find(a => a.name === log.asset_name);
+    const asset = (assets||[]).find(a => a.id === log.asset_id) || (assets||[]).find(a => a.name === log.asset_name);
     const site = asset?.location;
-    // We don't have category on the log directly, try to infer from related WO — fallback: in scope if no restriction set
+    const category = asset?.category;
     const siteMatch = !supervisedSites?.length || (site && supervisedSites.includes(site));
-    return siteMatch; // category checked separately when available
+    const categoryMatch = !supervisedCategories?.length || (category && supervisedCategories.includes(category));
+    return siteMatch && categoryMatch;
   };
 
   const inScopeLogs = logs.filter(isInScope);
@@ -3488,7 +3595,8 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
           )}
           {log.breakdown_id || log.issue_id ? (
             <div style={{ marginTop: 12, background: C.blue+"11", border: `1px solid ${C.blue}33`, borderRadius: 8, padding: 12, fontSize: 12, color: C.blue }}>
-              ℹ️ This log is linked to a {log.breakdown_id ? "breakdown" : "issue"}. Please approve it from the <strong>Breakdowns & Issues</strong> tab so the operator confirmation step isn't skipped.
+              <div style={{ marginBottom: 8 }}>ℹ️ This log is linked to a {log.breakdown_id ? "breakdown" : "issue"}. Approve it from the <strong>Breakdowns & Issues</strong> tab so the operator confirmation step isn't skipped.</div>
+              <Btn small onClick={onJumpToBreakdowns} color={C.blue}>{t(lang,"goToBreakdownsTab")}</Btn>
             </div>
           ) : (isAdmin || !dimmed) && (
             <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={() => setLogs(prev => prev.filter(l => l.id!==log.id))} onRejected={() => setLogs(prev => prev.filter(l => l.id!==log.id))} />
@@ -3527,19 +3635,56 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors }) {
     </div>
   );
 }
-function UserManagement({ lang }) {
+function UserManagement({ lang, sites }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
-  const [form, setForm] = useState({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
+  const [identifierType, setIdentifierType] = useState("email"); // "email" | "phone"
+  const [form, setForm] = useState({ email: "", phone: "", password: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+  const resetForm = () => { setForm({ email: "", phone: "", password: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] }); setIdentifierType("email"); };
 
   useEffect(() => { loadUsers(); }, []);
   const loadUsers = async () => { setLoading(true); const { data } = await supabase.from("user_roles").select("*").order("name"); setUsers(data||[]); setLoading(false); };
+
   const submit = async () => {
-    if (!form.email||!form.name) { setError(t(lang,"email")); return; }
+    if (!form.name) { setError(t(lang,"fullName")); return; }
+    if (identifierType === "email" && !form.email) { setError(t(lang,"email")); return; }
+    if (identifierType === "phone" && !form.phone) { setError(t(lang,"phone")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("USR"), email: form.email, name: form.name, role: form.role, site: form.site||null, supervised_sites: form.role==="supervisor" ? (form.supervised_sites.length?form.supervised_sites:null) : null, supervised_categories: form.role==="supervisor" ? (form.supervised_categories.length?form.supervised_categories:null) : null };
-    const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
-    if (err) { setError(err.message); } else { setSuccess("✓"); setForm({ email: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] }); setShowForm(false); loadUsers(); }
+    const scopedSites = form.role==="supervisor" ? (form.supervised_sites.length?form.supervised_sites:null) : null;
+    const scopedCategories = form.role==="supervisor" ? (form.supervised_categories.length?form.supervised_categories:null) : null;
+
+    if (form.password) {
+      // Brand-new login — must go through the Edge Function since only it holds the service-role key.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      try {
+        const res = await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          body: JSON.stringify({
+            email: identifierType === "email" ? form.email : null,
+            phone: identifierType === "phone" ? form.phone : null,
+            password: form.password, name: form.name, role: form.role, site: form.site || null,
+            supervised_sites: scopedSites, supervised_categories: scopedCategories,
+          }),
+        });
+        const result = await res.json();
+        if (!res.ok) { setError(result.error || "Failed to create account."); setSaving(false); return; }
+      } catch { setError("Failed to reach account creation service."); setSaving(false); return; }
+    } else {
+      // No password — just updating an existing account's role/permissions.
+      let record;
+      if (identifierType === "phone") {
+        const existing = users.find(u => u.phone === form.phone);
+        if (!existing) { setError(t(lang,"noAccountForPhone")); setSaving(false); return; }
+        record = { ...existing, name: form.name, role: form.role, site: form.site||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+      } else {
+        record = { id: uid("USR"), email: form.email, phone: form.phone||null, name: form.name, role: form.role, site: form.site||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+      }
+      const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
+      if (err) { setError(err.message); setSaving(false); return; }
+    }
+    setSuccess("✓"); resetForm(); setShowForm(false); loadUsers();
     setSaving(false);
   };
   const deleteUser = async (id) => { await supabase.from("user_roles").delete().eq("id",id); setUsers(prev => prev.filter(u => u.id!==id)); };
@@ -3569,11 +3714,27 @@ function UserManagement({ lang }) {
       {showForm && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"addUpdateUser")}</div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"identifierType")}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {["email","phone"].map(m => (
+                <button key={m} onClick={() => setIdentifierType(m)} style={{ background: identifierType===m?C.accent:C.surface, color: identifierType===m?"#fff":C.muted, border: `1px solid ${identifierType===m?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  {m==="email"?t(lang,"email"):t(lang,"phone")}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />
+            {identifierType === "phone"
+              ? <Input label={t(lang,"phone")} value={form.phone} onChange={f("phone")} type="tel" placeholder="01012345678" />
+              : <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />}
             <Input label={t(lang,"fullName")} value={form.name} onChange={f("name")} />
             <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","supervisor","admin"]} />
-            <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...SITES.filter(s => s !== "— Select Site —")]} />
+            <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...sites.filter(s => s !== "— Select Site —")]} />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Input label={t(lang,"password")} value={form.password} onChange={f("password")} type="password" />
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{t(lang,"newAccountPasswordHint")}</div>
           </div>
           {form.role === "supervisor" && (
             <div style={{ marginTop: 14, background: C.surface, border: `1px solid ${C.purple}33`, borderRadius: 8, padding: 14 }}>
@@ -3583,7 +3744,7 @@ function UserManagement({ lang }) {
                 <div>
                   <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>{t(lang,"supervisedSites")}</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 150, overflowY: "auto" }}>
-                    {SITES.filter(s => s !== "— Select Site —").map(s => (
+                    {sites.filter(s => s !== "— Select Site —").map(s => (
                       <label key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.subtle, cursor: "pointer" }}>
                         <input type="checkbox" checked={form.supervised_sites.includes(s)} onChange={e => {
                           setForm(p => ({ ...p, supervised_sites: e.target.checked ? [...p.supervised_sites, s] : p.supervised_sites.filter(x => x !== s) }));
@@ -3610,8 +3771,8 @@ function UserManagement({ lang }) {
             </div>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"saveUser")}</Btn>
-            <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+            <Btn onClick={submit} disabled={saving}>{saving?(form.password?t(lang,"creatingAccount"):t(lang,"saving")):t(lang,"saveUser")}</Btn>
+            <Btn variant="secondary" onClick={() => { setShowForm(false); resetForm(); }}>{t(lang,"cancel")}</Btn>
           </div>
         </div>
       )}
@@ -3620,7 +3781,7 @@ function UserManagement({ lang }) {
           {users.map(u => (
             <div key={u.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                <div><div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.email}</div></div>
+                <div><div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.phone ? `📱 ${u.phone}` : u.email}</div></div>
                 <span style={{ background: roleColor(u.role)+"22", color: roleColor(u.role), border: `1px solid ${roleColor(u.role)}44`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon(u.role)} {u.role}</span>
               </div>
               {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>📍 {u.site}</div>}
@@ -3639,6 +3800,86 @@ function UserManagement({ lang }) {
     </div>
   );
 }
+function SitesManagement({ sites, setSites, lang }) {
+  const [newName, setNewName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [renameId, setRenameId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const addSite = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setSaving(true); setError(null);
+    const { data, error: err } = await supabase.from("sites").insert([{ name }]).select().single();
+    if (err) { setError(err.code === "23505" ? t(lang,"duplicateSiteName") : err.message); }
+    else { setSites(prev => [...prev, data].sort((a,b) => a.name.localeCompare(b.name))); setNewName(""); }
+    setSaving(false);
+  };
+
+  const toggleActive = async (site) => {
+    const { error: err } = await supabase.from("sites").update({ active: !site.active }).eq("id", site.id);
+    if (!err) setSites(prev => prev.map(s => s.id === site.id ? { ...s, active: !site.active } : s));
+  };
+
+  const saveRename = async (site) => {
+    const name = renameValue.trim();
+    if (!name || name === site.name) { setRenameId(null); return; }
+    const { error: err } = await supabase.from("sites").update({ name }).eq("id", site.id);
+    if (err) { setError(err.code === "23505" ? t(lang,"duplicateSiteName") : err.message); }
+    else { setSites(prev => prev.map(s => s.id === site.id ? { ...s, name } : s).sort((a,b) => a.name.localeCompare(b.name))); setRenameId(null); }
+  };
+
+  return (
+    <div>
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>{t(lang,"sitesManagement")}</div>
+        <div style={{ fontSize: 13, color: C.muted }}>{t(lang,"manageSites")}</div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <input value={newName} onChange={e => setNewName(e.target.value)} placeholder={t(lang,"siteNamePlaceholder")}
+          onKeyDown={e => e.key === "Enter" && addSite()}
+          style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13, flex: "1 1 220px" }} />
+        <Btn onClick={addSite} disabled={saving || !newName.trim()}>{t(lang,"addSite")}</Btn>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+        {sites.map(s => (
+          <div key={s.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, opacity: s.active ? 1 : 0.55 }}>
+            {renameId === s.id ? (
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                <input value={renameValue} onChange={e => setRenameValue(e.target.value)} onKeyDown={e => e.key === "Enter" && saveRename(s)}
+                  style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", color: C.text, fontSize: 13, flex: 1 }} autoFocus />
+              </div>
+            ) : (
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>{s.name}</div>
+            )}
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>
+              {s.active ? t(lang,"active") : t(lang,"inactiveStatus")}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {renameId === s.id ? (
+                <>
+                  <Btn small onClick={() => saveRename(s)} color={C.blue}>{t(lang,"save")}</Btn>
+                  <Btn small variant="secondary" onClick={() => setRenameId(null)}>{t(lang,"cancel")}</Btn>
+                </>
+              ) : (
+                <Btn small onClick={() => { setRenameId(s.id); setRenameValue(s.name); }} color={C.blue}>{t(lang,"edit")}</Btn>
+              )}
+              <Btn small variant={s.active ? "danger" : "secondary"} onClick={() => toggleActive(s)}>
+                {s.active ? t(lang,"deactivate") : t(lang,"activate")}
+              </Btn>
+            </div>
+          </div>
+        ))}
+        {sites.length===0 && <div style={{ color: C.muted, fontSize: 13 }}>{t(lang,"noSitesRegistered")}</div>}
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 16 }}>
+        ⚠️ Renaming a site only affects new entries — assets, work orders, and reports already assigned to the old name will keep showing the old name.
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [session, setSession] = useState(null); const [authLoading, setAuthLoading] = useState(true);
@@ -3646,6 +3887,7 @@ export default function App() {
   const [lang, setLang] = useState("en");
   const [tab, setTab] = useState(null);
   const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]); const [issues, setIssues] = useState([]);
+  const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
   const isAdmin = session?.user?.email === ADMIN_EMAIL || userRole.role === "admin";
@@ -3679,14 +3921,17 @@ export default function App() {
 
   const load = useCallback(async () => {
     setLoading({ workOrders: true, assets: true, vendors: true });
-    const [woRes, astRes, vndRes, issRes] = await Promise.all([
+    const [woRes, astRes, vndRes, issRes, siteRes] = await Promise.all([
       supabase.from("work_orders").select("*").order("due", { ascending: true }),
       supabase.from("assets").select("*").order("name", { ascending: true }),
       supabase.from("vendors").select("*").order("name", { ascending: true }),
       supabase.from("issue_reports").select("*").order("reported_at", { ascending: false }),
+      supabase.from("sites").select("*").order("name", { ascending: true }),
     ]);
     if (woRes.error||astRes.error||vndRes.error) { setGlobalError("Failed to load data."); }
     else { setWorkOrders(woRes.data||[]); setAssets(astRes.data||[]); setVendors(vndRes.data||[]); setIssues(issRes.data||[]); }
+    // sites table may not exist yet if the Phase 1 migration hasn't been run — fall back silently.
+    setSites(siteRes.error ? [] : (siteRes.data||[]));
     setLoading({ workOrders: false, assets: false, vendors: false });
   }, []);
 
@@ -3695,6 +3940,8 @@ export default function App() {
 
   if (authLoading) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>Loading...</div>;
   if (!session) return <LoginScreen lang={lang} />;
+
+  const siteNames = sites.length ? ["— Select Site —", ...sites.filter(s => s.active).map(s => s.name)] : DEFAULT_SITES;
 
   const roleColor = { admin: C.accent, maintenance: C.blue, operations: C.green }[userRole.role] || C.muted;
   const roleIcon = { admin: "★", maintenance: "🔧", operations: "🏭" }[userRole.role] || "👤";
@@ -3706,7 +3953,7 @@ export default function App() {
     ...(isSupervisor ? [t(lang,"pendingApprovalsSection")] : []),
     ...(userRole.role === "maintenance" ? [t(lang,"mySubmissions")] : []),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
-    ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users")] : []),
+    ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users"), t(lang,"sitesManagement")] : []),
   ];
   const activeTab = tab || tabs[0];
 
@@ -3738,17 +3985,18 @@ export default function App() {
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} />}
-        {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} />}
+        {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
-        {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} assets={assets} lang={lang} userRole={userRole} />}
-        {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} lang={lang} userRole={userRole} />}
+        {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
+        {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
-        {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} />}
+        {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
         {activeTab===t(lang,"partsCatalogMgmt") && isAdmin && <PartsCatalogMgmt lang={lang} />}
-        {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} />}
+        {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"sitesManagement") && isAdmin && <SitesManagement sites={sites} setSites={setSites} lang={lang} />}
       </div>
     </div>
   );
