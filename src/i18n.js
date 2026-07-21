@@ -103,6 +103,9 @@ export const translations = {
     due: "Due",
     photos: "Photos",
     actions: "Actions",
+    searchWorkOrders: "Search work orders (ID, title, asset, vendor, note)...",
+    searchResultsFor: "Search results for",
+    clearSearch: "✕ Clear",
 
     // Assets
     searchAssets: "Search assets...",
@@ -519,6 +522,9 @@ breakdownsAndIssues: "Breakdowns & Issues",
     due: "الاستحقاق",
     photos: "الصور",
     actions: "إجراءات",
+    searchWorkOrders: "بحث في أوامر العمل (الرقم، العنوان، المعدة، المورد، الملاحظة)...",
+    searchResultsFor: "نتائج البحث عن",
+    clearSearch: "✕ مسح",
 
     // Assets
     searchAssets: "البحث عن المعدات...",

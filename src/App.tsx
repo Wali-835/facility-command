@@ -1881,6 +1881,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const [showArchived, setShowArchived] = useState(false);
   const [woType, setWoType] = useState("pm");
   const [archiveMonth, setArchiveMonth] = useState("All");
+  const [search, setSearch] = useState("");
   const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "" });
   const [manualAsset, setManualAsset] = useState(false);
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
@@ -1920,6 +1921,18 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
     const d = new Date(w.updated_at || w.start_date || "");
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
   }).filter(Boolean)).values()].sort().reverse();
+
+  // Free-text search — spans PM + Other, active + archived, ignores the type toggle
+  const isSearching = search.trim().length > 0;
+  const searchResults = (() => {
+    if (!isSearching) return [];
+    const q = search.trim().toLowerCase();
+    return workOrders
+      .filter(w => [w.id, w.title, w.asset, w.vendor, w.status_note, w.category, w.site, w.assignee]
+        .filter(Boolean).some(v => String(v).toLowerCase().includes(q)))
+      .filter(w => (siteFilter === "All" || w.site === siteFilter) && (catFilter === "All" || w.category === catFilter))
+      .sort((a,b) => (b.updated_at||b.start_date||"").localeCompare(a.updated_at||a.start_date||""));
+  })();
 
   // Group by site
   const groupBySite = (list) => {
@@ -2099,11 +2112,21 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
           </div>
         </div>
       )}
-{/* PM vs Other Toggle */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-        <button onClick={() => setWoType("pm")} style={{ background: woType==="pm"?C.blue:C.card, color: woType==="pm"?"#fff":C.muted, border: `1px solid ${woType==="pm"?C.blue:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>📅 Scheduled PM</button>
-        <button onClick={() => setWoType("other")} style={{ background: woType==="other"?C.accent:C.card, color: woType==="other"?"#fff":C.muted, border: `1px solid ${woType==="other"?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>🔧 Other Work Orders</button>
+{/* Search */}
+      <div style={{ marginBottom: 14, display: "flex", gap: 8, alignItems: "center" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t(lang,"searchWorkOrders")}
+          style={{ flex: 1, minWidth: 240, maxWidth: 460, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13, boxSizing: "border-box" }} />
+        {isSearching && (
+          <button onClick={() => setSearch("")} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>{t(lang,"clearSearch")}</button>
+        )}
       </div>
+      {/* PM vs Other Toggle */}
+      {!isSearching && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          <button onClick={() => setWoType("pm")} style={{ background: woType==="pm"?C.blue:C.card, color: woType==="pm"?"#fff":C.muted, border: `1px solid ${woType==="pm"?C.blue:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>📅 Scheduled PM</button>
+          <button onClick={() => setWoType("other")} style={{ background: woType==="other"?C.accent:C.card, color: woType==="other"?"#fff":C.muted, border: `1px solid ${woType==="other"?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>🔧 Other Work Orders</button>
+        </div>
+      )}
       {/* Filters */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -2115,11 +2138,13 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
             <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
             {WO_CATEGORIES.map(c => <option key={c}>{c}</option>)}
           </select>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
-            <option value="Active">Active</option>
-            <option value="All">{t(lang,"all")}</option>
-            {WO_STATUSES.filter(s => s !== "Completed").map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          {!isSearching && (
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+              <option value="Active">Active</option>
+              <option value="All">{t(lang,"all")}</option>
+              {WO_STATUSES.filter(s => s !== "Completed").map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
         </div>
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newWorkOrder")}</Btn>
       </div>
@@ -2177,8 +2202,16 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
         </div>
       )}
 
+      {/* Search results — flat list across PM/Other and active/archived */}
+      {!loading && isSearching && (
+        <div>
+          <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>{t(lang,"searchResultsFor")} "{search.trim()}" — {searchResults.length} {t(lang,"workOrders")}</div>
+          <WOTable wos={searchResults} />
+        </div>
+      )}
+
       {/* Active Work Orders grouped by site */}
-      {loading ? <Spinner lang={lang} /> : (
+      {loading ? <Spinner lang={lang} /> : isSearching ? null : (
         <div>
           {Object.entries(activeGroups).map(([site, wos]) => wos.length === 0 ? null : (
             <div key={site} style={{ marginBottom: 28 }}>
