@@ -307,7 +307,8 @@ export default function AssetPage() {
   // Role helpers
   const isAdmin = userRole?.role === "admin";
   const isSupervisor = userRole?.role === "supervisor" || isAdmin;
-  const isMaintenance = userRole?.role === "maintenance" || isSupervisor;
+  const isMaintenance = userRole?.role === "maintenance" || userRole?.role === "engineer" || isSupervisor;
+  const isEngineer = userRole?.role === "engineer" || isSupervisor;
   const isOperations = userRole?.role === "operations";
 
   useEffect(() => {
@@ -404,11 +405,13 @@ export default function AssetPage() {
     if (openBreakdowns.length > 0 || openIssues.length > 0) { setError(t(lang,"assetHasOpenReport")); return; }
     setSaving(true);
     const now = new Date().toISOString();
-    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: brkForm.reported_by, reported_at: now, downtime_start: now, description: brkForm.description, severity: brkForm.severity, status: "Open" };
+    const woId = uid("WO");
+    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: brkForm.reported_by, reported_at: now, downtime_start: now, description: brkForm.description, severity: brkForm.severity, status: "Open", work_order_id: woId };
     const { error: err } = await supabase.from("breakdown_reports").insert([record]);
     if (err) { setError(err.message); } else {
       await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
       setAsset(prev => ({ ...prev, status: "Under Maintenance" }));
+      await supabase.from("work_orders").insert([{ id: woId, title: `Breakdown — ${asset.name}: ${brkForm.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: brkForm.severity==="Critical"?"Critical":brkForm.severity==="High"?"High":"Medium", status: "Open", start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id }]);
       try {
         await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/notify-breakdown", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }, body: JSON.stringify({ breakdown: record, type: "reported" }) });
       } catch (e) { console.error(e); }
@@ -435,7 +438,7 @@ export default function AssetPage() {
     const record = { id: issueId, asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: issForm.reported_by, reported_at: now, description: issForm.description, severity: issForm.severity, status: "Open", work_order_id: woId };
     const { error: err } = await supabase.from("issue_reports").insert([record]);
     if (!err) {
-      await supabase.from("work_orders").insert([{ id: woId, title: `Issue — ${asset.name}: ${issForm.description.slice(0,50)}`, asset: asset.name, priority: issForm.severity === "Critical" ? "Critical" : "Medium", status: "Open", start_date: now.split("T")[0], due: null, vendor: null }]);
+      await supabase.from("work_orders").insert([{ id: woId, title: `Issue — ${asset.name}: ${issForm.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: issForm.severity === "Critical" ? "Critical" : "Medium", status: "Open", start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, issue_id: issueId }]);
       try {
         await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/notify-breakdown", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }, body: JSON.stringify({ breakdown: { ...record, type: "issue" }, type: "reported" }) });
       } catch (e) { console.error(e); }
@@ -464,7 +467,7 @@ export default function AssetPage() {
   };
 
   // ─── Resolve Breakdown ────────────────────────────────────────────────────
-  const [resolveForm, setResolveForm] = useState({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
+  const [resolveForm, setResolveForm] = useState({ breakdown_id: "", work_order_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
   const rf = (k) => (v) => setResolveForm(p => ({ ...p, [k]: v }));
 
   const [resolveConfirming, setResolveConfirming] = useState(false);
@@ -501,10 +504,11 @@ export default function AssetPage() {
       downtime_end: TODAY,
       downtime_hours: mins,
     }]);
+    if (resolveForm.work_order_id) await supabase.from("work_orders").update({ status: "Completed" }).eq("id", resolveForm.work_order_id);
     setSuccess(isSupervisorOrAdmin ? "Breakdown resolved — pending operator confirmation." : "Breakdown resolved — pending supervisor approval.");
     setBreakdowns(prev => prev.map(b => b.id===resolveForm.breakdown_id?{...b,status:newStatus}:b));
     setView("breakdowns");
-    setResolveForm({ breakdown_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
+    setResolveForm({ breakdown_id: "", work_order_id: "", notes: "", vendor: "", downtime_start: "", reported_by: "", description: "", severity: "" });
     setResolveConfirming(false);
   };
 
@@ -515,7 +519,7 @@ export default function AssetPage() {
   const submitLog = async () => {
     if (!logForm.title) { setError("Title is required."); return; }
     setSaving(true);
-    const needsApproval = userRole?.role === "maintenance";
+    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "engineer";
     const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: logForm.log_type, title: logForm.title, description: logForm.description, performed_by: logForm.performed_by || userRole?.name, vendor: logForm.vendor==="— None —"?null:logForm.vendor||null, start_date: TODAY, end_date: TODAY, cost: logForm.cost ? parseFloat(logForm.cost) : null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString() };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else {
@@ -773,7 +777,7 @@ export default function AssetPage() {
                           {b.status === "Open" && (
                             <Btn small onClick={async () => { await supabase.from("breakdown_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", b.id); setBreakdowns(prev => prev.map(x => x.id===b.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>
                           )}
-                          <Btn small onClick={() => { setResolveForm({ breakdown_id: b.id, notes: "", vendor: "", downtime_start: b.downtime_start, reported_by: b.reported_by, description: b.description, severity: b.severity }); setView("resolve"); }} color={C.green}>✅ Resolve Breakdown</Btn>
+                          <Btn small onClick={() => { setResolveForm({ breakdown_id: b.id, work_order_id: b.work_order_id||"", notes: "", vendor: "", downtime_start: b.downtime_start, reported_by: b.reported_by, description: b.description, severity: b.severity }); setView("resolve"); }} color={C.green}>✅ Resolve Breakdown</Btn>
                         </div>
                       )}
                       {b.status === "Pending Supervisor Approval" && isSupervisor && (
@@ -866,7 +870,7 @@ export default function AssetPage() {
         <div>
           <SectionHeader title="🔧 Add Maintenance Log" onBack={() => setView("home")} />
           <div style={{ background: C.card, border: `1px solid ${C.blue}44`, borderRadius: 12, padding: 20 }}>
-            {userRole?.role === "maintenance" && (
+            {(userRole?.role === "maintenance" || userRole?.role === "engineer") && (
               <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}33`, borderRadius: 8, padding: 10, fontSize: 13, color: C.yellow, marginBottom: 14 }}>
                 ⏳ This log will need supervisor approval before it's closed.
               </div>
@@ -1059,7 +1063,7 @@ function WOCard({ wo, isMaintenance, isSupervisor, onUpdate }) {
               <div style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, textTransform: "uppercase" }}>New Status</div>
                 <select value={newStatus} onChange={e => setNewStatus(e.target.value)} style={{ width: "100%", background: "#141720", border: "1px solid #252b3b", borderRadius: 8, padding: "10px", color: "#e2e8f0", fontSize: 14 }}>
-                  {WO_STATUSES.map(s => <option key={s}>{s}</option>)}
+                  {(isSupervisor ? WO_STATUSES : WO_STATUSES.filter(s => s !== "Completed")).map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
               <div style={{ marginBottom: 10 }}>

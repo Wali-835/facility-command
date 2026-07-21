@@ -209,9 +209,9 @@ function IssueReportModal({ asset, userRole, onClose, onReported, onWorkOrderCre
     // Auto-create work order
     const newWO = {
       id: woId, title: `Issue — ${asset.name}: ${form.description.slice(0,50)}`,
-      asset: asset.name, priority: form.severity === "Critical" ? "Critical" : form.severity === "High" ? "High" : "Medium",
+      asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: form.severity === "Critical" ? "Critical" : form.severity === "High" ? "High" : "Medium",
       status: "Open", assignee: null,
-      start_date: now.split("T")[0], due: null, vendor: null,
+      start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, issue_id: issueId,
     };
     await supabase.from("work_orders").insert([newWO]);
     if (onWorkOrderCreated) onWorkOrderCreated(newWO);
@@ -263,7 +263,7 @@ function IssueReportModal({ asset, userRole, onClose, onReported, onWorkOrderCre
   );
 }
 // ─── BREAKDOWN REPORT MODAL ───────────────────────────────────────────────────
-function BreakdownReportModal({ asset, userRole, onClose, onReported, lang }) {
+function BreakdownReportModal({ asset, userRole, onClose, onReported, onWorkOrderCreated, lang }) {
   const [form, setForm] = useState({ description: "", severity: "High", reported_by: userRole.name || "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -274,10 +274,14 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, lang }) {
     if (!form.reported_by) { setError(t(lang,"yourName")); return; }
     setSaving(true); setError(null);
     const now = new Date().toISOString();
-    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: form.reported_by, reported_at: now, downtime_start: now, description: form.description, severity: form.severity, status: "Open" };
+    const woId = uid("WO");
+    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: form.reported_by, reported_at: now, downtime_start: now, description: form.description, severity: form.severity, status: "Open", work_order_id: woId };
     const { error: err } = await supabase.from("breakdown_reports").insert([record]);
     if (err) { setError(err.message); setSaving(false); return; }
     await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
+    const newWO = { id: woId, title: `Breakdown — ${asset.name}: ${form.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: form.severity==="Critical"?"Critical":form.severity==="High"?"High":"Medium", status: "Open", assignee: null, start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id };
+    const { error: woErr } = await supabase.from("work_orders").insert([newWO]);
+    if (!woErr && onWorkOrderCreated) onWorkOrderCreated(newWO);
     onReported(record);
     onClose();
     setSaving(false);
@@ -419,8 +423,13 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
     const isSupervisorOrAdmin2 = userRole?.role === "supervisor" || userRole?.role === "admin";
     const logRecord = { id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name, log_type: "Corrective Repair", title: `Breakdown Repair — ${breakdown.severity} severity`, description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`, performed_by: form.resolved_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY, end_date: TODAY, cost: null, status: isSupervisorOrAdmin2 ? "Completed" : "In Progress", approval_status: isSupervisorOrAdmin2 ? "Approved" : "Pending", approved_by: isSupervisorOrAdmin2 ? userRole?.name : null, approved_at: isSupervisorOrAdmin2 ? new Date().toISOString() : null, breakdown_id: breakdown.id, downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null, downtime_end: TODAY, downtime_hours: hours };
     await supabase.from("maintenance_logs").insert([logRecord]);
-    const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", breakdown.asset_name).in("status", ["Open","In Progress","Pending"]);
-    if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
+    if (breakdown.work_order_id) {
+      await supabase.from("work_orders").update({ status: "Completed" }).eq("id", breakdown.work_order_id);
+    } else {
+      // Legacy breakdown filed before WO linkage existed — fall back to the old best-effort match.
+      const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", breakdown.asset_name).in("status", ["Open","In Progress","Pending"]);
+      if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
+    }
     onResolved({ ...breakdown, status: "Resolved", downtime_end: now, downtime_hours: hours });
     onClose();
   };
@@ -617,7 +626,7 @@ const onIssueReported = (record) => {
 
   const resolveIssue = async (issue) => {
     const now = new Date().toISOString();
-    const newStatus = userRole?.role === "maintenance" ? "Pending Supervisor Approval" : "Resolved";
+    const newStatus = (userRole?.role === "maintenance" || userRole?.role === "engineer") ? "Pending Supervisor Approval" : "Resolved";
     await supabase.from("issue_reports").update({ status: newStatus, resolved_by: userRole.name || "", resolved_at: now, supervisor_approved_by: newStatus === "Resolved" ? userRole?.name : null, supervisor_approved_at: newStatus === "Resolved" ? now : null }).eq("id", issue.id);
     if (issue.work_order_id && newStatus === "Resolved") await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
 
@@ -658,7 +667,7 @@ const onIssueReported = (record) => {
   return (
     <div>
       {showReportForm && selectedAsset && (
-        <BreakdownReportModal asset={selectedAsset} userRole={userRole} lang={lang} onClose={() => { setShowReportForm(false); setSelectedAsset(null); }} onReported={onReported} />
+        <BreakdownReportModal asset={selectedAsset} userRole={userRole} lang={lang} onClose={() => { setShowReportForm(false); setSelectedAsset(null); }} onReported={onReported} onWorkOrderCreated={wo => setWorkOrders(prev => [wo, ...prev])} />
       )}
       {showIssueForm && selectedIssueAsset && (
         <IssueReportModal asset={selectedIssueAsset} userRole={userRole} lang={lang} onClose={() => { setShowIssueForm(false); setSelectedIssueAsset(null); }} onReported={onIssueReported} onWorkOrderCreated={wo => setWorkOrders(prev => [wo, ...prev])} />
@@ -875,7 +884,7 @@ const onIssueReported = (record) => {
                       ✅ Supervisor: {issue.supervisor_approved_by}{issue.operator_confirmed_by && ` · ${t(lang,"confirmedBy")}: ${issue.operator_confirmed_by}`}
                     </div>
                   )}
-                  {(issue.status === "Open" || issue.status === "Acknowledged") && (userRole.role === "maintenance" || userRole.role === "admin") && (
+                  {(issue.status === "Open" || issue.status === "Acknowledged") && (userRole.role === "maintenance" || userRole.role === "engineer" || userRole.role === "admin") && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {issue.status === "Open" && <Btn onClick={() => acknowledgeIssue(issue)} color={C.blue}>{t(lang,"acknowledge")}</Btn>}
                       <PasswordConfirm lang={lang} actionLabel={t(lang,"markResolved")} onConfirmed={() => resolveIssue(issue)} />
@@ -1259,7 +1268,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRoleRole === "maintenance";
+    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "engineer";
     const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess(t(lang,"saving")); setLogs(prev => [record,...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" }); setShowForm(false); }
@@ -1540,12 +1549,17 @@ function WorkOrderPhotosModal({ workOrder, onClose, lang }) {
     </div>
   );
 }
-function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance, userRole, lang, vendors, assets }) {
+function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance, isEngineer, technicians, userRole, lang, vendors, assets }) {
   const [logs, setLogs] = useState([]);
   const [actionPlan, setActionPlan] = useState(wo.action_plan || "");
   const [targetDate, setTargetDate] = useState(wo.target_date || "");
   const [editingPlan, setEditingPlan] = useState(false);
   const [savingPlan, setSavingPlan] = useState(false);
+  const [assignee, setAssignee] = useState(wo.assignee || "");
+  const [editingAssignee, setEditingAssignee] = useState(false);
+  const [savingAssignee, setSavingAssignee] = useState(false);
+  const [rejectingPart, setRejectingPart] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
   const [parts, setParts] = useState({});
   const [catalogParts, setCatalogParts] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
@@ -1602,10 +1616,17 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     setSavingPlan(false);
   };
 
+  const saveAssignee = async () => {
+    setSavingAssignee(true); setError(null);
+    const { error: err } = await supabase.from("work_orders").update({ assignee: assignee||null }).eq("id", wo.id);
+    if (err) { setError(err.message); } else { setEditingAssignee(false); }
+    setSavingAssignee(false);
+  };
+
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRole?.role === "maintenance";
+    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "engineer";
     const asset = (assets||[]).find(a => a.name === wo.asset);
     const record = { id: uid("LOG"), asset_id: asset?.id||null, asset_name: wo.asset, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval?"In Progress":"Completed", approval_status: needsApproval?"Pending":"Approved", approved_by: needsApproval?null:userRole?.name, approved_at: needsApproval?null:new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start&&form.downtime_end)?Math.round((new Date(form.downtime_end)-new Date(form.downtime_start))/(1000*60*60)):null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
@@ -1628,7 +1649,8 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
     const assetForPart = (assets||[]).find(a => a.name === wo.asset);
-    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId };
+    const autoApprove = isEngineer;
+    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId, approval_status: autoApprove?"Approved":"Pending", approved_by: autoApprove?userRole?.name:null, approved_at: autoApprove?new Date().toISOString():null };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
       setSuccess("✓");
@@ -1636,18 +1658,38 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
       setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
       setShowPartForm(null);
       setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) + (qty*unitCost) } : l));
-      // Check if the log is already approved — if so deduct stock immediately
-      const log = logs.find(l => l.id === logId);
-      if (log?.approval_status === "Approved") {
-        if (cleanModelPartId) {
-          const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", cleanModelPartId).single();
-          if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-qty) }).eq("id", cleanModelPartId);
-        }
-        if (cleanAssetPartId) {
-          const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanAssetPartId).single();
-          if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", cleanAssetPartId);
-        }
-      }
+      if (autoApprove) await deductPartStock(cleanModelPartId, cleanAssetPartId, qty);
+    }
+    setSaving(false);
+  };
+
+  const deductPartStock = async (modelPartId, assetPartId, qty) => {
+    if (modelPartId) {
+      const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", modelPartId).single();
+      if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-qty) }).eq("id", modelPartId);
+    }
+    if (assetPartId) {
+      const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", assetPartId).single();
+      if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", assetPartId);
+    }
+  };
+
+  const approvePart = async (part, logId) => {
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, rejection_reason: null }).eq("id", part.id);
+    if (err) { setError(err.message); } else {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now } : p) }));
+      await deductPartStock(part.model_part_id, part.asset_part_id, part.quantity);
+    }
+    setSaving(false);
+  };
+
+  const rejectPart = async (part, logId, reason) => {
+    setSaving(true); setError(null);
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Rejected", rejection_reason: reason||null }).eq("id", part.id);
+    if (err) { setError(err.message); } else {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Rejected", rejection_reason: reason||null } : p) }));
     }
     setSaving(false);
   };
@@ -1707,6 +1749,30 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
             )}
           </div>
 
+          {/* Technician Assignment */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: editingAssignee?12:0 }}>
+              <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>👷 {t(lang,"assignee")}</div>
+              {isSupervisor && !editingAssignee && (
+                <button onClick={() => setEditingAssignee(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12 }}>{t(lang,"edit")}</button>
+              )}
+            </div>
+            {editingAssignee ? (
+              <div>
+                <select value={assignee} onChange={e => setAssignee(e.target.value)} style={{ width: "100%", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px", color: C.text, fontSize: 13 }}>
+                  <option value="">{t(lang,"unassigned")}</option>
+                  {(technicians||[]).map(tc => <option key={tc.name} value={tc.name}>{tc.name}{tc.role==="engineer"?` (${t(lang,"engineerRole")})`:""}</option>)}
+                </select>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <Btn small onClick={saveAssignee} disabled={savingAssignee}>{savingAssignee?t(lang,"saving"):t(lang,"save")}</Btn>
+                  <Btn small variant="secondary" onClick={() => { setAssignee(wo.assignee||""); setEditingAssignee(false); }}>{t(lang,"cancel")}</Btn>
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: assignee?C.subtle:C.muted, marginTop: 8 }}>{assignee || t(lang,"unassigned")}</div>
+            )}
+          </div>
+
           {/* Add Log Button */}
           <div style={{ marginBottom: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addMaintenanceLog")}</Btn>
@@ -1732,7 +1798,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
                 <Input label={t(lang,"backToOperationLabel")} value={form.downtime_end} onChange={f("downtime_end")} type="date" />
               </div>
               <div style={{ marginTop: 12 }}><Textarea label={t(lang,"descriptionNotes")} value={form.description} onChange={f("description")} /></div>
-              {userRole?.role === "maintenance" && (
+              {(userRole?.role === "maintenance" || userRole?.role === "engineer") && (
                 <div style={{ marginTop: 10, background: C.yellow+"11", border: `1px solid ${C.yellow}33`, borderRadius: 6, padding: "8px 12px", fontSize: 12, color: C.yellow }}>
                   ⏳ {t(lang,"approvalRequired")} — {t(lang,"pendingApproval")}
                 </div>
@@ -1807,24 +1873,45 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
                           <div style={{ overflowX: "auto" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                               <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                                {[t(lang,"partName"),t(lang,"partNumber"),t(lang,"quantity"),"Unit","Total",t(lang,"supplier"),""].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>)}
+                                {[t(lang,"partName"),t(lang,"partNumber"),t(lang,"quantity"),"Unit","Total",t(lang,"supplier"),t(lang,"partApproval"),""].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>)}
                               </tr></thead>
                               <tbody>
-                                {parts[log.id].map(part => (
-                                  <tr key={part.id} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                                {parts[log.id].map(part => ([
+                                  <tr key={part.id} style={{ borderBottom: rejectingPart===part.id?"none":`1px solid ${C.border}22` }}>
                                     <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{part.part_name}</td>
                                     <td style={{ padding: "8px 10px", color: C.subtle, fontFamily: "monospace" }}>{part.part_number||"—"}</td>
                                     <td style={{ padding: "8px 10px", color: C.subtle }}>{part.quantity}</td>
                                     <td style={{ padding: "8px 10px", color: C.subtle }}>{part.unit_cost?`$${part.unit_cost}`:"—"}</td>
                                     <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost?`$${part.total_cost}`:"—"}</td>
                                     <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
+                                    <td style={{ padding: "8px 10px" }}>
+                                      <Badge label={part.approval_status==="Approved"?t(lang,"approved"):part.approval_status==="Rejected"?t(lang,"rejected"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:C.yellow} />
+                                      {isEngineer && part.approval_status==="Pending" && (
+                                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                          <Btn small onClick={() => approvePart(part, log.id)} disabled={saving} color={C.green}>✓ {t(lang,"approve")}</Btn>
+                                          <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                        </div>
+                                      )}
+                                    </td>
                                     <td style={{ padding: "8px 10px" }}><Btn small variant="danger" onClick={() => deletePart(part.id, log.id)}>{t(lang,"del")}</Btn></td>
-                                  </tr>
-                                ))}
+                                  </tr>,
+                                  rejectingPart===part.id ? (
+                                    <tr key={part.id+"-reject"} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                                      <td colSpan={8} style={{ padding: "0 10px 10px" }}>
+                                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                          <input value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder={t(lang,"rejectionReasonPlaceholder")}
+                                            style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 12 }} />
+                                          <Btn small variant="danger" onClick={() => { rejectPart(part, log.id, rejectReason); setRejectingPart(null); }} disabled={saving}>{t(lang,"confirm")}</Btn>
+                                          <Btn small variant="secondary" onClick={() => setRejectingPart(null)}>{t(lang,"cancel")}</Btn>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : null
+                                ]))}
                                 <tr style={{ borderTop: `1px solid ${C.border}` }}>
                                   <td colSpan={4} style={{ padding: "8px 10px", color: C.muted, fontSize: 11 }}>Total</td>
                                   <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>${parts[log.id].reduce((s,p)=>s+(p.total_cost||0),0).toLocaleString()}</td>
-                                  <td colSpan={2} />
+                                  <td colSpan={3} />
                                 </tr>
                               </tbody>
                             </table>
@@ -1865,7 +1952,7 @@ const WO_CATEGORIES = ["MHE","HVAC","Fire Alarm & Suppression","Electrical","Plu
 const WO_STATUSES = ["Open","In Progress","Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled","Completed"];
 const CATEGORY_ICONS = { "MHE":"🏭","HVAC":"❄️","Fire Alarm & Suppression":"🔥","Electrical":"⚡","Plumbing":"🔧","Civil & Structural":"🏗️","Security Systems":"🔒","Lighting":"💡","General Maintenance":"🔨" };
 
-function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupervisor, isMaintenance, vendors, assets, lang, userRole, sites }) {
+function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupervisor, isMaintenance, isEngineer, technicians, vendors, assets, lang, userRole, sites }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -1882,10 +1969,11 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const [woType, setWoType] = useState("pm");
   const [archiveMonth, setArchiveMonth] = useState("All");
   const [search, setSearch] = useState("");
-  const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "" });
+  const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "", assignee: "" });
   const [manualAsset, setManualAsset] = useState(false);
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —",...vendors.filter(v => v.status==="Active").map(v => v.name)];
+  const technicianOptions = ["— Unassigned —",...(technicians||[]).map(tc => tc.name)];
 
   // Auto-set (and lock) site + category when a registered asset is selected
   const handleAssetSelect = (assetName) => {
@@ -1962,8 +2050,9 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
     if (manualAsset && !form.site) { setError(t(lang,"site")); return; }
     setSaving(true); setError(null);
     const vendorName = form.vendor === "— None —" || !form.vendor ? null : form.vendor;
+    const assigneeName = form.assignee === "— Unassigned —" || !form.assignee ? null : form.assignee;
     const found = assets.find(a => a.name === form.asset);
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: found?.category || form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null, action_plan: form.action_plan||null, target_date: form.target_date||null };
+    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: found?.category || form.category, priority: form.priority, status: "Open", assignee: assigneeName, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null, action_plan: form.action_plan||null, target_date: form.target_date||null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
     if (err) { setError(err.message); } else {
       onAdd(record);
@@ -1971,7 +2060,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
         const { data: vd } = await supabase.from("vendors").select("id, open_orders").eq("name", vendorName).single();
         if (vd) await supabase.from("vendors").update({ open_orders: (vd.open_orders||0)+1 }).eq("id", vd.id);
       }
-      setForm({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "" });
+      setForm({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "", assignee: "" });
       setManualAsset(false);
       setShowForm(false);
     }
@@ -2026,6 +2115,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
               <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600, maxWidth: 220 }}>
                 {wo.title}
                 {wo.action_plan && <div style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginTop: 3 }} title={wo.action_plan}>📋 {wo.action_plan.length > 60 ? wo.action_plan.slice(0,60)+"…" : wo.action_plan}</div>}
+                {wo.assignee && <div style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginTop: 3 }}>👷 {wo.assignee}</div>}
               </td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{CATEGORY_ICONS[wo.category]||"🔧"} {wo.category||"—"}</td>
@@ -2064,7 +2154,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   return (
     <div>
       {selectedWO && <WorkOrderPhotosModal workOrder={selectedWO} lang={lang} onClose={() => setSelectedWO(null)} />}
-      {logWO && <WOMaintenanceModal wo={logWO} onClose={() => setLogWO(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} userRole={userRole} lang={lang} vendors={vendors} assets={assets} />}
+      {logWO && <WOMaintenanceModal wo={logWO} onClose={() => setLogWO(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} userRole={userRole} lang={lang} vendors={vendors} assets={assets} />}
       {noteItem && (
         <div style={{ position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: "100%", maxWidth: 460 }}>
@@ -2085,7 +2175,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
           </div>
         </div>
       )}
-      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:sites},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"},{key:"target_date",label:t(lang,"targetCompletion"),type:"date"},{key:"action_plan",label:t(lang,"actionPlan")}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:sites},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee"),options:technicianOptions},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"},{key:"target_date",label:t(lang,"targetCompletion"),type:"date"},{key:"action_plan",label:t(lang,"actionPlan")}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
 
@@ -2190,6 +2280,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
             <Input label={t(lang,"dueDate")} value={form.due} onChange={f("due")} type="date" />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
             <Sel label={t(lang,"vendor")} value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
+            <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />
             <Input label={t(lang,"targetCompletion")} value={form.target_date} onChange={f("target_date")} type="date" />
           </div>
           <div style={{ marginTop: 12 }}>
@@ -2261,6 +2352,189 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
               </div>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+const TICKET_STATUSES = ["Open","In Progress","Resolved","Closed"];
+
+function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRole }) {
+  const [events, setEvents] = useState([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
+  const [comment, setComment] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { loadEvents(); }, []);
+  const loadEvents = async () => {
+    setLoadingEvents(true);
+    const { data } = await supabase.from("ticket_events").select("*").eq("ticket_id", ticket.id).order("at", { ascending: true });
+    setEvents(data || []);
+    setLoadingEvents(false);
+  };
+
+  const addComment = async () => {
+    if (!comment.trim()) return;
+    setSaving(true); setError(null);
+    const entry = { id: uid("TEV"), ticket_id: ticket.id, event_type: "comment", note: comment.trim(), by: userRole?.name || "—" };
+    const { error: err } = await supabase.from("ticket_events").insert([entry]);
+    if (err) { setError(err.message); } else { setEvents(prev => [...prev, entry]); setComment(""); }
+    setSaving(false);
+  };
+
+  const changeStatus = async (newStatus) => {
+    if (newStatus === ticket.status) return;
+    setSaving(true); setError(null);
+    const { error: err } = await supabase.from("tickets").update({ status: newStatus }).eq("id", ticket.id);
+    if (err) { setError(err.message); setSaving(false); return; }
+    const entry = { id: uid("TEV"), ticket_id: ticket.id, event_type: "status_change", note: `${ticket.status} → ${newStatus}`, by: userRole?.name || "—" };
+    await supabase.from("ticket_events").insert([entry]);
+    setEvents(prev => [...prev, entry]);
+    onUpdated({ ...ticket, status: newStatus });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 640, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{ticket.title}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{ticket.category||"—"} · {ticket.site||"—"}{ticket.asset_name?` · ${ticket.asset_name}`:""}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          {ticket.description && <div style={{ background: C.surface, borderRadius: 8, padding: 12, fontSize: 13, color: C.subtle, marginBottom: 16, whiteSpace: "pre-wrap" }}>{ticket.description}</div>}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16, fontSize: 12, color: C.muted }}>
+            <span>{t(lang,"requestedBy")}: <strong style={{ color: C.text }}>{ticket.requested_by||"—"}</strong></span>
+            <span>{t(lang,"priority")}: <strong style={{ color: C.text }}>{ticket.priority}</strong></span>
+            {ticket.assignee && <span>{t(lang,"assignee")}: <strong style={{ color: C.text }}>{ticket.assignee}</strong></span>}
+            {ticket.work_order_id && <span>{t(lang,"linkedWorkOrder")}: <strong style={{ color: C.text, fontFamily: "monospace" }}>{ticket.work_order_id}</strong></span>}
+          </div>
+          {isMaintenance && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"status")}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {TICKET_STATUSES.map(s => (
+                  <button key={s} onClick={() => changeStatus(s)} disabled={saving} style={{ background: ticket.status===s?C.accent:C.surface, color: ticket.status===s?"#fff":C.muted, border: `1px solid ${ticket.status===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{s}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 12 }}>{t(lang,"ticketLog")}</div>
+          {loadingEvents ? <Spinner lang={lang} /> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16, maxHeight: 260, overflowY: "auto" }}>
+              {events.length===0 && <div style={{ fontSize: 12, color: C.muted }}>—</div>}
+              {events.map(ev => (
+                <div key={ev.id} style={{ fontSize: 12, color: C.subtle, background: C.surface, borderRadius: 8, padding: "8px 12px" }}>
+                  <div><span style={{ color: C.text, fontWeight: 600 }}>{ev.by}</span> · <span style={{ color: C.muted }}>{fmtDateTime(ev.at)}</span>{ev.event_type==="status_change" && <span style={{ color: C.accent }}> · {t(lang,"status")}</span>}</div>
+                  {ev.note && <div style={{ marginTop: 2 }}>{ev.note}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={comment} onChange={e => setComment(e.target.value)} placeholder={t(lang,"addComment")}
+              style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13 }} />
+            <Btn small onClick={addComment} disabled={saving||!comment.trim()}>{t(lang,"post")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, assets, workOrders, lang, sites }) {
+  const [tickets, setTickets] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("Open");
+  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "" });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  useEffect(() => { loadTickets(); }, []);
+  const loadTickets = async () => {
+    setLoading(true);
+    const { data, error: err } = await supabase.from("tickets").select("*").order("requested_at", { ascending: false });
+    if (err) setError(err.message); else setTickets(data || []);
+    setLoading(false);
+  };
+
+  const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
+  const assetOptions = ["— None —", ...(assets||[]).map(a => a.name)];
+  const woOptions = ["— None —", ...(workOrders||[]).filter(w => w.status !== "Completed").map(w => w.id)];
+
+  const submit = async () => {
+    if (!form.title) { setError(t(lang,"title")); return; }
+    setSaving(true); setError(null);
+    const assetObj = (assets||[]).find(a => a.name === form.asset);
+    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
+    const { error: err } = await supabase.from("tickets").insert([record]);
+    if (err) { setError(err.message); setSaving(false); return; }
+    await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: form.description||null, by: userRole?.name||"—" }]);
+    setTickets(prev => [record, ...prev]);
+    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "" });
+    setShowForm(false);
+    setSaving(false);
+  };
+
+  const filtered = statusFilter === "All" ? tickets : tickets.filter(tk => tk.status === statusFilter);
+
+  return (
+    <div>
+      {selected && <TicketDetail ticket={selected} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} isMaintenance={isMaintenance} lang={lang} userRole={userRole} />}
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+          <option value="All">{t(lang,"all")}</option>
+          {TICKET_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newTicket")}</Btn>
+      </div>
+
+      {showForm && (
+        <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
+          <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"newTicket")}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+            <Input label={t(lang,"title")} value={form.title} onChange={f("title")} />
+            <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
+            <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
+            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={sites} />
+            <Sel label={t(lang,"linkedAssetOptional")} value={form.asset||"— None —"} onChange={f("asset")} options={assetOptions} />
+            <Sel label={t(lang,"linkedWorkOrderOptional")} value={form.work_order_id||"— None —"} onChange={f("work_order_id")} options={woOptions} />
+            {isMaintenance && <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Textarea label={t(lang,"descriptionNotes")} value={form.description} onChange={f("description")} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"create")}</Btn>
+            <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      )}
+
+      {loading ? <Spinner lang={lang} /> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {filtered.map(tk => (
+            <div key={tk.id} onClick={() => setSelected(tk)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{tk.title}</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{tk.category||"—"}{tk.site?` · ${tk.site}`:""}{tk.asset_name?` · ${tk.asset_name}`:""} · {fmtDateTime(tk.requested_at)}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Badge label={tk.priority} color={{Critical:C.red,High:C.accent,Medium:C.yellow,Low:C.muted}[tk.priority]||C.muted} />
+                <Badge label={tk.status} color={tk.status==="Resolved"||tk.status==="Closed"?C.green:tk.status==="In Progress"?C.blue:C.yellow} />
+              </div>
+            </div>
+          ))}
+          {filtered.length===0 && <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noTicketsFound")}</div>}
         </div>
       )}
     </div>
@@ -3815,8 +4089,8 @@ function UserManagement({ lang, sites }) {
     setSaving(false);
   };
   const deleteUser = async (id) => { await supabase.from("user_roles").delete().eq("id",id); setUsers(prev => prev.filter(u => u.id!==id)); };
-  const roleColor = (r) => ({ admin: C.accent, maintenance: C.blue, operations: C.green }[r]||C.muted);
-  const roleIcon = (r) => ({ admin: "★", maintenance: "🔧", operations: "🏭" }[r]||"👤");
+  const roleColor = (r) => ({ admin: C.accent, maintenance: C.blue, engineer: C.purple, supervisor: C.purple, operations: C.green }[r]||C.muted);
+  const roleIcon = (r) => ({ admin: "★", maintenance: "🔧", engineer: "🛠", supervisor: "👁", operations: "🏭" }[r]||"👤");
 
   return (
     <div>
@@ -3830,7 +4104,7 @@ function UserManagement({ lang, sites }) {
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addUser")}</Btn>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 24 }}>
-        {[["🏭",t(lang,"operationsRole"),"operations",t(lang,"operationsDesc"),C.green],["🔧",t(lang,"maintenancePersonnelRole"),"maintenance",t(lang,"maintenancePersonnelDesc"),C.blue],["👁",t(lang,"supervisorRole"),"supervisor",t(lang,"supervisorDesc"),C.purple],["★",t(lang,"adminRole"),"admin",t(lang,"adminDesc"),C.accent]].map(([icon,title,role,desc,color]) => (
+        {[["🏭",t(lang,"operationsRole"),"operations",t(lang,"operationsDesc"),C.green],["🔧",t(lang,"maintenancePersonnelRole"),"maintenance",t(lang,"maintenancePersonnelDesc"),C.blue],["🛠",t(lang,"engineerRole"),"engineer",t(lang,"engineerDesc"),C.purple],["👁",t(lang,"supervisorRole"),"supervisor",t(lang,"supervisorDesc"),C.purple],["★",t(lang,"adminRole"),"admin",t(lang,"adminDesc"),C.accent]].map(([icon,title,role,desc,color]) => (
           <div key={role} style={{ background: C.card, border: `1px solid ${color}44`, borderRadius: 8, padding: 14 }}>
             <div style={{ fontSize: 18, marginBottom: 6 }}>{icon}</div>
             <div style={{ fontSize: 13, fontWeight: 700, color }}>{title}</div>
@@ -3856,7 +4130,7 @@ function UserManagement({ lang, sites }) {
               ? <Input label={t(lang,"phone")} value={form.phone} onChange={f("phone")} type="tel" placeholder="01012345678" />
               : <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />}
             <Input label={t(lang,"fullName")} value={form.name} onChange={f("name")} />
-            <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","supervisor","admin"]} />
+            <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","engineer","supervisor","admin"]} />
             <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...sites.filter(s => s !== "— Select Site —")]} />
           </div>
           <div style={{ marginTop: 12 }}>
@@ -4015,11 +4289,13 @@ export default function App() {
   const [tab, setTab] = useState(null);
   const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]); const [issues, setIssues] = useState([]);
   const [sites, setSites] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
   const isAdmin = session?.user?.email === ADMIN_EMAIL || userRole.role === "admin";
   const isSupervisor = userRole.role === "supervisor" || isAdmin;
-  const isMaintenance = userRole.role === "maintenance" || userRole.role === "supervisor" || isAdmin;
+  const isMaintenance = userRole.role === "maintenance" || userRole.role === "engineer" || userRole.role === "supervisor" || isAdmin;
+  const isEngineer = userRole.role === "engineer" || isSupervisor;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthLoading(false); });
@@ -4048,17 +4324,19 @@ export default function App() {
 
   const load = useCallback(async () => {
     setLoading({ workOrders: true, assets: true, vendors: true });
-    const [woRes, astRes, vndRes, issRes, siteRes] = await Promise.all([
+    const [woRes, astRes, vndRes, issRes, siteRes, techRes] = await Promise.all([
       supabase.from("work_orders").select("*").order("due", { ascending: true }),
       supabase.from("assets").select("*").order("name", { ascending: true }),
       supabase.from("vendors").select("*").order("name", { ascending: true }),
       supabase.from("issue_reports").select("*").order("reported_at", { ascending: false }),
       supabase.from("sites").select("*").order("name", { ascending: true }),
+      supabase.from("user_roles").select("name,role").in("role", ["maintenance","engineer"]).order("name", { ascending: true }),
     ]);
     if (woRes.error||astRes.error||vndRes.error) { setGlobalError("Failed to load data."); }
     else { setWorkOrders(woRes.data||[]); setAssets(astRes.data||[]); setVendors(vndRes.data||[]); setIssues(issRes.data||[]); }
     // sites table may not exist yet if the Phase 1 migration hasn't been run — fall back silently.
     setSites(siteRes.error ? [] : (siteRes.data||[]).sort(byNameNatural));
+    setTechnicians(techRes.error ? [] : (techRes.data||[]));
     setLoading({ workOrders: false, assets: false, vendors: false });
   }, []);
 
@@ -4070,15 +4348,16 @@ export default function App() {
 
   const siteNames = sites.length ? ["— Select Site —", ...sites.filter(s => s.active).map(s => s.name)] : DEFAULT_SITES;
 
-  const roleColor = { admin: C.accent, maintenance: C.blue, operations: C.green }[userRole.role] || C.muted;
-  const roleIcon = { admin: "★", maintenance: "🔧", operations: "🏭" }[userRole.role] || "👤";
-  const roleLabel = { admin: t(lang,"adminRole"), maintenance: t(lang,"maintenancePersonnelRole"), supervisor: t(lang,"supervisorRole"), operations: t(lang,"operationsRole") }[userRole.role] || userRole.role;
+  const roleColor = { admin: C.accent, maintenance: C.blue, engineer: C.purple, operations: C.green }[userRole.role] || C.muted;
+  const roleIcon = { admin: "★", maintenance: "🔧", engineer: "🛠", operations: "🏭" }[userRole.role] || "👤";
+  const roleLabel = { admin: t(lang,"adminRole"), maintenance: t(lang,"maintenancePersonnelRole"), engineer: t(lang,"engineerRole"), supervisor: t(lang,"supervisorRole"), operations: t(lang,"operationsRole") }[userRole.role] || userRole.role;
 
   const tabs = [
     t(lang,"overview"),
     t(lang,"breakdownsAndIssues"),
+    t(lang,"tickets"),
     ...(isSupervisor ? [t(lang,"pendingApprovalsSection")] : []),
-    ...(userRole.role === "maintenance" ? [t(lang,"mySubmissions")] : []),
+    ...(userRole.role === "maintenance" || userRole.role === "engineer" ? [t(lang,"mySubmissions")] : []),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
     ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users"), t(lang,"sitesManagement")] : []),
   ];
@@ -4115,7 +4394,8 @@ export default function App() {
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
-        {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
+        {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
         {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} sites={siteNames} />}

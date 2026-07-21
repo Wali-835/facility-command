@@ -106,6 +106,30 @@ export const translations = {
     searchWorkOrders: "Search work orders (ID, title, asset, vendor, note)...",
     searchResultsFor: "Search results for",
     clearSearch: "✕ Clear",
+    unassigned: "Unassigned",
+    confirm: "Confirm",
+
+    // Engineer role
+    engineerRole: "Engineer",
+    engineerDesc: "Approves or rejects spare-parts requests on work orders.",
+
+    // Spare-parts approval
+    partApproval: "Approval",
+    approve: "Approve",
+    reject: "Reject",
+    rejectionReasonPlaceholder: "Reason for rejecting this part request...",
+
+    // Tickets
+    tickets: "Tickets",
+    newTicket: "+ New Ticket",
+    requestedBy: "Requested By",
+    linkedWorkOrder: "Linked Work Order",
+    linkedAssetOptional: "Linked Asset (optional)",
+    linkedWorkOrderOptional: "Linked Work Order (optional)",
+    ticketLog: "Ticket Log",
+    addComment: "Add a comment...",
+    post: "Post",
+    noTicketsFound: "No tickets found.",
 
     // Assets
     searchAssets: "Search assets...",
@@ -525,6 +549,30 @@ breakdownsAndIssues: "Breakdowns & Issues",
     searchWorkOrders: "بحث في أوامر العمل (الرقم، العنوان، المعدة، المورد، الملاحظة)...",
     searchResultsFor: "نتائج البحث عن",
     clearSearch: "✕ مسح",
+    unassigned: "غير معيّن",
+    confirm: "تأكيد",
+
+    // Engineer role
+    engineerRole: "مهندس",
+    engineerDesc: "يوافق أو يرفض طلبات قطع الغيار في أوامر العمل.",
+
+    // Spare-parts approval
+    partApproval: "الموافقة",
+    approve: "موافقة",
+    reject: "رفض",
+    rejectionReasonPlaceholder: "سبب رفض طلب هذه القطعة...",
+
+    // Tickets
+    tickets: "التذاكر",
+    newTicket: "+ تذكرة جديدة",
+    requestedBy: "طلب بواسطة",
+    linkedWorkOrder: "أمر العمل المرتبط",
+    linkedAssetOptional: "المعدة المرتبطة (اختياري)",
+    linkedWorkOrderOptional: "أمر العمل المرتبط (اختياري)",
+    ticketLog: "سجل التذكرة",
+    addComment: "أضف تعليقًا...",
+    post: "نشر",
+    noTicketsFound: "لا توجد تذاكر.",
 
     // Assets
     searchAssets: "البحث عن المعدات...",
