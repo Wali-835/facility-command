@@ -173,16 +173,22 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
 
   const complete = async () => {
     if (!executionId) return;
-    setSaving(true);
-    await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
+    setSaving(true); setError(null);
+    const filtered = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
+    const answeredInFilter = filtered.filter(i => responses[i.id]).length;
+    if (answeredInFilter < filtered.length) {
+      if (!window.confirm(`${filtered.length - answeredInFilter} items not yet answered. Complete anyway?`)) { setSaving(false); return; }
+    }
+    const { error: execErr } = await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
+    if (execErr) { setError(execErr.message); setSaving(false); return; }
     const passCount = Object.values(responses).filter(r => r.result==="PASS").length;
     const failCount = Object.values(responses).filter(r => r.result==="FAIL").length;
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
     const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
     const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects:\n${defects}` : "\nNo defects found."}`;
-    const needsApproval = userRole?.role === "maintenance";
-    const downtimeStart = brk?.downtime_start ? brk.downtime_start.split("T")[0] : TODAY;
-    await supabase.from("maintenance_logs").insert([{ id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Corrective Repair", title: `Breakdown Resolved — ${brk?.severity||""} severity`, description: `BREAKDOWN REPORTED BY: ${brk?.reported_by}\n\nISSUE: ${brk?.description}\n\nMAINTENANCE NOTES: ${resolveForm.notes}`, performed_by: userRole?.name, vendor: resolveForm.vendor==="— None —"?null:resolveForm.vendor||null, start_date: downtimeStart, end_date: TODAY, cost: null, status: "Completed", approval_status: isSupervisor ? "Approved" : "Pending", approved_by: isSupervisor ? userRole?.name : null, approved_at: isSupervisor ? new Date().toISOString() : null, downtime_start: downtimeStart, downtime_end: TODAY, downtime_hours: mins }]);
+    const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: "In Progress", approval_status: "Pending", checklist_execution_id: executionId, downtime_start: null, downtime_end: null, downtime_hours: null };
+    const { error: logErr } = await supabase.from("maintenance_logs").insert([logRecord]);
+    if (logErr) { setError(logErr.message); setSaving(false); return; }
     const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", asset.name).in("status", ["Open","In Progress","Pending"]).ilike("title","PM - %");
     if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
     onDone();
@@ -197,6 +203,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
     <div>
       <SectionHeader title="📋 CIL Checklist" onBack={onBack} />
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        {executionId && <Banner msg={error} color={C.red} onDismiss={() => setError(null)} />}
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.muted, marginBottom: 6 }}>
             <span>Progress: {answeredCount}/{filteredItems.length}</span>

@@ -946,22 +946,26 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
 
   const complete = async () => {
     if (!executionId) return;
-    setSaving(true);
+    setSaving(true); setError(null);
     const filtered = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
-    const answered = Object.keys(responses).length;
-    if (answered < filtered.length) {
-      if (!window.confirm(`${filtered.length - answered} items not yet answered. Complete anyway?`)) { setSaving(false); return; }
+    const answeredInFilter = filtered.filter(i => responses[i.id]).length;
+    if (answeredInFilter < filtered.length) {
+      if (!window.confirm(`${filtered.length - answeredInFilter} items not yet answered. Complete anyway?`)) { setSaving(false); return; }
     }
-    await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
+    const { error: execErr } = await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
+    if (execErr) { setError(execErr.message); setSaving(false); return; }
     const passCount = Object.values(responses).filter(r => r.result==="PASS").length;
     const failCount = Object.values(responses).filter(r => r.result==="FAIL").length;
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
     const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
     const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects:\n${defects}` : "\nNo defects found."}`;
-    const needsApproval = userRole?.role === "maintenance";
     const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: "In Progress", approval_status: "Pending", work_order_id: workOrderId || null, checklist_execution_id: executionId, downtime_start: null, downtime_end: null, downtime_hours: null };
-    await supabase.from("maintenance_logs").insert([logRecord]);
-    if (workOrderId) await supabase.from("work_orders").update({ status: "Awaiting Approval" }).eq("id", workOrderId);
+    const { error: logErr } = await supabase.from("maintenance_logs").insert([logRecord]);
+    if (logErr) { setError(logErr.message); setSaving(false); return; }
+    if (workOrderId) {
+      const { error: woErr } = await supabase.from("work_orders").update({ status: "Awaiting Approval" }).eq("id", workOrderId);
+      if (woErr) { setError(woErr.message); setSaving(false); return; }
+    }
     setSuccess(`${t(lang,"checklistCompleted")} ${failCount > 0 ? `⚠️ ${failCount} FAIL` : "✅"} — Sent for supervisor approval.`);
     setSaving(false);
   };
