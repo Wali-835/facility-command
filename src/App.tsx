@@ -32,6 +32,8 @@ const TODAY = new Date().toISOString().split("T")[0];
 const uid = (p) => `${p}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2,5).toUpperCase()}`;
 // Postgres unique-violation (23505) on assets.serial_number -> friendly message; anything else -> raw DB message.
 const assetDbErrorMessage = (err, lang) => err?.code === "23505" ? t(lang,"duplicateSerialNumber") : err.message;
+// Natural sort so "Site2" comes before "Site10" (plain string sort puts "Site10" first).
+const byNameNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
 const priorityColor = (p) => ({ Critical: C.red, High: C.accent, Medium: C.yellow, Low: C.green }[p] || C.muted);
 const statusColor = (s) => ({
   Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow,
@@ -894,12 +896,14 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
   const [items, setItems] = useState([]);
   const [responses, setResponses] = useState({});
   const [executionId, setExecutionId] = useState(null);
+  const [executionStatus, setExecutionStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [executedBy, setExecutedBy] = useState(userRole?.name || userRole?.email || "");
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [filterFreq, setFilterFreq] = useState("All");
+  const isCompleted = executionStatus === "Completed";
 
   useEffect(() => { loadChecklist(); }, []);
 
@@ -913,6 +917,7 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
     const { data: existing } = await supabase.from("checklist_executions").select("*").eq("asset_id", asset.id).eq("month", now.getMonth()+1).eq("year", now.getFullYear()).limit(1);
     if (existing?.length) {
       setExecutionId(existing[0].id);
+      setExecutionStatus(existing[0].status);
       setExecutedBy(existing[0].executed_by || "");
       const { data: resps } = await supabase.from("checklist_responses").select("*").eq("execution_id", existing[0].id);
       const respMap = {};
@@ -932,7 +937,7 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
   };
 
   const setResponse = async (itemId, result, notes="") => {
-    if (!executionId) return;
+    if (!executionId || isCompleted) return;
     const existing = responses[itemId];
     if (existing) {
       await supabase.from("checklist_responses").update({ result, notes }).eq("id", existing.id);
@@ -945,7 +950,7 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
   };
 
   const complete = async () => {
-    if (!executionId) return;
+    if (!executionId || isCompleted) return;
     setSaving(true); setError(null);
     const filtered = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
     const answeredInFilter = filtered.filter(i => responses[i.id]).length;
@@ -954,6 +959,7 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
     }
     const { error: execErr } = await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
     if (execErr) { setError(execErr.message); setSaving(false); return; }
+    setExecutionStatus("Completed");
     const passCount = Object.values(responses).filter(r => r.result==="PASS").length;
     const failCount = Object.values(responses).filter(r => r.result==="FAIL").length;
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
@@ -1006,6 +1012,11 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
         <div style={{ padding: 24 }}>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
           <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
+          {isCompleted && (
+            <div style={{ background: C.green+"11", border: `1px solid ${C.green}44`, borderRadius: 10, padding: 16, marginBottom: 20, fontSize: 13, color: C.green }}>
+              ✅ This month's checklist was already completed by {executedBy}. Responses below are read-only.
+            </div>
+          )}
           {!executionId && (
             <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: C.accent, fontWeight: 700, marginBottom: 12, textTransform: "uppercase" }}>{t(lang,"startChecklist")}</div>
@@ -1044,18 +1055,20 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
                                 <div style={{ fontSize: 12, color: C.muted, marginTop: 2, direction: "rtl", textAlign: "right" }}>{item.item_ar}</div>
                               </div>
                               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                {executionId ? (
+                                {executionId && !isCompleted ? (
                                   <>
                                     <button onClick={() => setResponse(item.id,"PASS")} style={{ background: result==="PASS"?C.green:"transparent", color: result==="PASS"?"#fff":C.green, border: `2px solid ${C.green}`, borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ PASS</button>
                                     <button onClick={() => setResponse(item.id,"FAIL")} style={{ background: result==="FAIL"?C.red:"transparent", color: result==="FAIL"?"#fff":C.red, border: `2px solid ${C.red}`, borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✗ FAIL</button>
                                     <button onClick={() => setResponse(item.id,"N/A")} style={{ background: result==="N/A"?C.muted:"transparent", color: result==="N/A"?"#fff":C.muted, border: `2px solid ${C.muted}44`, borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>N/A</button>
                                   </>
+                                ) : isCompleted ? (
+                                  result ? <Badge label={result} color={result==="PASS"?C.green:result==="FAIL"?C.red:C.muted} /> : <span style={{ fontSize: 12, color: C.muted }}>—</span>
                                 ) : <span style={{ fontSize: 12, color: C.muted }}>{t(lang,"startChecklist")}</span>}
                               </div>
                             </div>
                             {result==="FAIL" && executionId && (
                               <div style={{ marginTop: 10 }}>
-                                <textarea value={resp?.notes||""} onChange={e => setResponse(item.id,"FAIL",e.target.value)} rows={2} style={{ width: "100%", background: C.card, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 13, boxSizing: "border-box", resize: "vertical" }} />
+                                <textarea value={resp?.notes||""} onChange={e => setResponse(item.id,"FAIL",e.target.value)} readOnly={isCompleted} rows={2} style={{ width: "100%", background: C.card, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 13, boxSizing: "border-box", resize: "vertical" }} />
                               </div>
                             )}
                           </div>
@@ -1065,7 +1078,7 @@ function ChecklistModal({ asset, workOrderId, onClose, lang, userRole }) {
                   </div>
                 );
               })}
-              {executionId && (
+              {executionId && !isCompleted && (
                 <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 10 }}>
                   {failCount > 0 && <div style={{ fontSize: 13, color: C.red }}>⚠️ {failCount} FAIL</div>}
                   <Btn onClick={complete} disabled={saving} color={C.green}>{saving ? t(lang,"completing") : `✓ ${t(lang,"completeChecklist")}`}</Btn>
@@ -1830,15 +1843,21 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const [showArchived, setShowArchived] = useState(false);
   const [woType, setWoType] = useState("pm");
   const [archiveMonth, setArchiveMonth] = useState("All");
-  const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "" });
+  const [form, setForm] = useState({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "" });
+  const [manualAsset, setManualAsset] = useState(false);
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const vendorOptions = ["— None —",...vendors.filter(v => v.status==="Active").map(v => v.name)];
 
-  // Auto-set site when asset is selected
+  // Auto-set (and lock) site when a registered asset is selected
   const handleAssetSelect = (assetName) => {
     f("asset")(assetName);
     const found = assets.find(a => a.name === assetName);
     if (found) f("site")(found.location);
+  };
+
+  const toggleManualAsset = () => {
+    setManualAsset(v => !v);
+    setForm(p => ({ ...p, asset: "", site: "" }));
   };
 
   // Split active vs archived
@@ -1890,10 +1909,11 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
 
   const submit = async () => {
     if (!form.title || !form.asset) { setError(t(lang,"title")); return; }
+    if (manualAsset && !form.site) { setError(t(lang,"site")); return; }
     setSaving(true); setError(null);
     const vendorName = form.vendor === "— None —" || !form.vendor ? null : form.vendor;
     const found = assets.find(a => a.name === form.asset);
-    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null };
+    const record = { id: uid("WO"), title: form.title, asset: form.asset, asset_id: found?.id || null, category: form.category, priority: form.priority, status: "Open", assignee: null, start_date: form.start_date||null, due: form.due||null, vendor: vendorName, site: found?.location || form.site || null, action_plan: form.action_plan||null, target_date: form.target_date||null };
     const { error: err } = await supabase.from("work_orders").insert([record]);
     if (err) { setError(err.message); } else {
       onAdd(record);
@@ -1901,7 +1921,8 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
         const { data: vd } = await supabase.from("vendors").select("id, open_orders").eq("name", vendorName).single();
         if (vd) await supabase.from("vendors").update({ open_orders: (vd.open_orders||0)+1 }).eq("id", vd.id);
       }
-      setForm({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "" });
+      setForm({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "" });
+      setManualAsset(false);
       setShowForm(false);
     }
     setSaving(false);
@@ -1952,7 +1973,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
           {wos.map((wo,i) => (
             <tr key={wo.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
               <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted, fontFamily: "monospace" }}>{wo.id}</td>
-              <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600 }}>{wo.title}</td>
+              <td style={{ padding: "10px 12px", fontSize: 13, color: C.text, fontWeight: 600, maxWidth: 220 }}>
+                {wo.title}
+                {wo.action_plan && <div style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginTop: 3 }} title={wo.action_plan}>📋 {wo.action_plan.length > 60 ? wo.action_plan.slice(0,60)+"…" : wo.action_plan}</div>}
+              </td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.asset}</td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{CATEGORY_ICONS[wo.category]||"🔧"} {wo.category||"—"}</td>
               <td style={{ padding: "10px 12px" }}><StatusSel value={wo.priority} options={["Critical","High","Medium","Low"]} onChange={val => updatePriority(wo.id,val)} /></td>
@@ -1968,7 +1992,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
                 )}
               </td>
               <td style={{ padding: "10px 12px", fontSize: 12, color: C.subtle }}>{wo.vendor||"—"}</td>
-              <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>{wo.due||"—"}</td>
+              <td style={{ padding: "10px 12px", fontSize: 12, color: wo.due&&wo.due<=TODAY&&wo.status!=="Completed"?C.red:C.subtle }}>
+                {wo.due||"—"}
+                {wo.target_date && <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>🎯 {fmtDate(wo.target_date)}</div>}
+              </td>
               <td style={{ padding: "10px 12px" }}>
                 <div style={{ display: "flex", gap: 6 }}>
                   <Btn small onClick={() => setSelectedWO(wo)} color={C.purple}>📷</Btn>
@@ -2008,7 +2035,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
           </div>
         </div>
       )}
-      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:sites},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
+      {editItem && <EditModal lang={lang} title={t(lang,"workOrders")} data={editItem} fields={[{key:"title",label:t(lang,"title")},{key:"asset",label:t(lang,"asset")},{key:"category",label:t(lang,"category"),options:WO_CATEGORIES},{key:"site",label:t(lang,"site"),options:sites},{key:"priority",label:t(lang,"priority"),options:["Critical","High","Medium","Low"]},{key:"status",label:t(lang,"status"),options:WO_STATUSES},{key:"status_note",label:t(lang,"statusUpdate")},{key:"vendor",label:t(lang,"vendor"),options:vendorOptions},{key:"assignee",label:t(lang,"assignee")},{key:"start_date",label:t(lang,"startDate"),type:"date"},{key:"due",label:t(lang,"dueDate"),type:"date"},{key:"target_date",label:t(lang,"targetCompletion"),type:"date"},{key:"action_plan",label:t(lang,"actionPlan")}]} onSave={saveEdit} onClose={() => setEditItem(null)} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.title} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
 
@@ -2068,21 +2095,40 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
             <Input label={t(lang,"title")} value={form.title} onChange={f("title")} />
             <div>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"asset")}</div>
-              <select value={form.asset} onChange={e => handleAssetSelect(e.target.value)} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
-                <option value="">{t(lang,"selectAsset")}</option>
-                {(assets||[]).map(a => <option key={a.id} value={a.name}>{a.name} ({a.location})</option>)}
-              </select>
+              {manualAsset ? (
+                <input value={form.asset} onChange={e => f("asset")(e.target.value)} placeholder={t(lang,"manualAssetPlaceholder")}
+                  style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+              ) : (
+                <select value={form.asset} onChange={e => handleAssetSelect(e.target.value)} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14 }}>
+                  <option value="">{t(lang,"selectAsset")}</option>
+                  {(assets||[]).map(a => <option key={a.id} value={a.name}>{a.name} ({a.location})</option>)}
+                </select>
+              )}
+              <button onClick={toggleManualAsset} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11, marginTop: 4, padding: 0 }}>
+                {manualAsset ? t(lang,"chooseFromAssetList") : t(lang,"assetNotInList")}
+              </button>
             </div>
             <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
-            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={sites} />
+            {manualAsset ? (
+              <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={sites} />
+            ) : (
+              <div>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"siteFromAsset")}</div>
+                <div style={{ background: C.surface+"88", border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: form.site?C.text:C.muted, fontSize: 14 }}>{form.site || "—"}</div>
+              </div>
+            )}
             <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
             <Input label={t(lang,"dueDate")} value={form.due} onChange={f("due")} type="date" />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
             <Sel label={t(lang,"vendor")} value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
+            <Input label={t(lang,"targetCompletion")} value={form.target_date} onChange={f("target_date")} type="date" />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Textarea label={t(lang,"actionPlan")} value={form.action_plan} onChange={f("action_plan")} placeholder={t(lang,"actionPlanPlaceholder")} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"create")}</Btn>
-            <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+            <Btn variant="secondary" onClick={() => { setShowForm(false); setManualAsset(false); }}>{t(lang,"cancel")}</Btn>
           </div>
         </div>
       )}
@@ -3817,7 +3863,7 @@ function SitesManagement({ sites, setSites, lang }) {
     setSaving(true); setError(null);
     const { data, error: err } = await supabase.from("sites").insert([{ name }]).select().single();
     if (err) { setError(err.code === "23505" ? t(lang,"duplicateSiteName") : err.message); }
-    else { setSites(prev => [...prev, data].sort((a,b) => a.name.localeCompare(b.name))); setNewName(""); }
+    else { setSites(prev => [...prev, data].sort(byNameNatural)); setNewName(""); }
     setSaving(false);
   };
 
@@ -3831,7 +3877,7 @@ function SitesManagement({ sites, setSites, lang }) {
     if (!name || name === site.name) { setRenameId(null); return; }
     const { error: err } = await supabase.from("sites").update({ name }).eq("id", site.id);
     if (err) { setError(err.code === "23505" ? t(lang,"duplicateSiteName") : err.message); }
-    else { setSites(prev => prev.map(s => s.id === site.id ? { ...s, name } : s).sort((a,b) => a.name.localeCompare(b.name))); setRenameId(null); }
+    else { setSites(prev => prev.map(s => s.id === site.id ? { ...s, name } : s).sort(byNameNatural)); setRenameId(null); }
   };
 
   return (
@@ -3935,7 +3981,7 @@ export default function App() {
     if (woRes.error||astRes.error||vndRes.error) { setGlobalError("Failed to load data."); }
     else { setWorkOrders(woRes.data||[]); setAssets(astRes.data||[]); setVendors(vndRes.data||[]); setIssues(issRes.data||[]); }
     // sites table may not exist yet if the Phase 1 migration hasn't been run — fall back silently.
-    setSites(siteRes.error ? [] : (siteRes.data||[]));
+    setSites(siteRes.error ? [] : (siteRes.data||[]).sort(byNameNatural));
     setLoading({ workOrders: false, assets: false, vendors: false });
   }, []);
 

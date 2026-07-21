@@ -120,6 +120,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
   const [items, setItems] = useState([]);
   const [responses, setResponses] = useState({});
   const [executionId, setExecutionId] = useState(null);
+  const [executionStatus, setExecutionStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [executedBy, setExecutedBy] = useState(userRole?.name || "");
@@ -127,6 +128,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
   const [filterFreq, setFilterFreq] = useState("All");
   const FREQ_COLORS = { D: "#22c55e", W: "#3b82f6", F: "#a855f7", M: "#f97316" };
   const FREQ_LABELS = { D: "Daily", W: "Weekly", F: "Bi-weekly", M: "Monthly" };
+  const isCompleted = executionStatus === "Completed";
 
   useEffect(() => { loadChecklist(); }, []);
 
@@ -140,6 +142,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
     const { data: existing } = await supabase.from("checklist_executions").select("*").eq("asset_id", asset.id).eq("month", now.getMonth()+1).eq("year", now.getFullYear()).limit(1);
     if (existing?.length) {
       setExecutionId(existing[0].id);
+      setExecutionStatus(existing[0].status);
       setExecutedBy(existing[0].executed_by || userRole?.name || "");
       const { data: resps } = await supabase.from("checklist_responses").select("*").eq("execution_id", existing[0].id);
       const respMap = {};
@@ -159,7 +162,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
   };
 
   const setResponse = async (itemId, result, notes="") => {
-    if (!executionId) return;
+    if (!executionId || isCompleted) return;
     const existing = responses[itemId];
     if (existing) {
       await supabase.from("checklist_responses").update({ result, notes }).eq("id", existing.id);
@@ -172,7 +175,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
   };
 
   const complete = async () => {
-    if (!executionId) return;
+    if (!executionId || isCompleted) return;
     setSaving(true); setError(null);
     const filtered = filterFreq === "All" ? items : items.filter(i => i.frequency === filterFreq);
     const answeredInFilter = filtered.filter(i => responses[i.id]).length;
@@ -181,6 +184,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
     }
     const { error: execErr } = await supabase.from("checklist_executions").update({ status: "Completed" }).eq("id", executionId);
     if (execErr) { setError(execErr.message); setSaving(false); return; }
+    setExecutionStatus("Completed");
     const passCount = Object.values(responses).filter(r => r.result==="PASS").length;
     const failCount = Object.values(responses).filter(r => r.result==="FAIL").length;
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
@@ -204,6 +208,11 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
       <SectionHeader title="📋 CIL Checklist" onBack={onBack} />
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
         {executionId && <Banner msg={error} color={C.red} onDismiss={() => setError(null)} />}
+        {isCompleted && (
+          <div style={{ background: C.green+"11", border: `1px solid ${C.green}44`, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: C.green }}>
+            ✅ This month's checklist was already completed by {executedBy}. Responses below are read-only.
+          </div>
+        )}
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.muted, marginBottom: 6 }}>
             <span>Progress: {answeredCount}/{filteredItems.length}</span>
@@ -239,16 +248,18 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
                       <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{item.item_en}</div>
                       <div style={{ fontSize: 11, color: C.muted, marginTop: 2, direction: "rtl" }}>{item.item_ar}</div>
                     </div>
-                    {executionId && (
+                    {executionId && !isCompleted ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         <button onClick={() => setResponse(item.id,"PASS")} style={{ background: result==="PASS"?C.green:"transparent", color: result==="PASS"?"#fff":C.green, border: `2px solid ${C.green}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓</button>
                         <button onClick={() => setResponse(item.id,"FAIL")} style={{ background: result==="FAIL"?C.red:"transparent", color: result==="FAIL"?"#fff":C.red, border: `2px solid ${C.red}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✗</button>
                         <button onClick={() => setResponse(item.id,"N/A")} style={{ background: result==="N/A"?C.muted:"transparent", color: result==="N/A"?"#fff":C.muted, border: `2px solid ${C.muted}44`, borderRadius: 6, padding: "5px 6px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>N/A</button>
                       </div>
-                    )}
+                    ) : isCompleted && result ? (
+                      <Badge label={result} color={result==="PASS"?C.green:result==="FAIL"?C.red:C.muted} />
+                    ) : null}
                   </div>
                   {result==="FAIL" && executionId && (
-                    <textarea placeholder="Describe the issue..." value={resp?.notes||""} onChange={e => setResponse(item.id,"FAIL",e.target.value)} rows={2}
+                    <textarea placeholder="Describe the issue..." value={resp?.notes||""} onChange={e => setResponse(item.id,"FAIL",e.target.value)} readOnly={isCompleted} rows={2}
                       style={{ width: "100%", background: C.card, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 12, boxSizing: "border-box", resize: "vertical", marginTop: 8 }} />
                   )}
                 </div>
@@ -256,7 +267,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
             })}
           </div>
         )}
-        {executionId && (
+        {executionId && !isCompleted && (
           <div style={{ marginTop: 16 }}>
             <Btn onClick={complete} disabled={saving} color={C.green}>{saving ? "Completing..." : "✓ Complete Checklist"}</Btn>
           </div>
