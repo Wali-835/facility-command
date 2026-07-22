@@ -3045,12 +3045,25 @@ const filtered = assets.filter(a =>
     doc.save(`Transfer_${asset.id}_${TODAY}.pdf`);
   };
 
+  const notifyTransfer = async (asset, oldLocation, newLocation) => {
+    try {
+      await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/notify-transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ asset, oldLocation, newLocation, changedBy: userRole?.name || "—" }),
+      });
+    } catch (e) { console.error("Transfer email error:", e); }
+  };
+
   const saveEdit = async (updated) => {
     if (updated.serial_number && assets.some(a => a.id !== updated.id && a.serial_number === updated.serial_number)) { setError(t(lang,"duplicateSerialNumber")); return; }
     const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id);
     if (!err) {
       setAssets(prev => prev.map(a => a.id===updated.id?updated:a));
-      if (editItem && editItem.location !== updated.location) generateTransferForm(updated, editItem.location, updated.location);
+      if (editItem && editItem.location !== updated.location) {
+        generateTransferForm(updated, editItem.location, updated.location);
+        notifyTransfer(updated, editItem.location, updated.location);
+      }
       setEditItem(null); setError(null);
     } else setError(assetDbErrorMessage(err, lang));
   };
