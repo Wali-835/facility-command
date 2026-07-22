@@ -117,7 +117,15 @@ export const translations = {
     partApproval: "Approval",
     approve: "Approve",
     reject: "Reject",
+    finalApprove: "Final Approve",
+    supervisorApproved: "Supervisor Approved",
     rejectionReasonPlaceholder: "Reason for rejecting this part request...",
+
+    // Notifications
+    notifications: "Notifications",
+    markAllRead: "Mark all read",
+    noNotifications: "No notifications yet.",
+    assignedToWO: "You were assigned to",
 
     // Tickets
     tickets: "Tickets",
@@ -560,7 +568,15 @@ breakdownsAndIssues: "Breakdowns & Issues",
     partApproval: "الموافقة",
     approve: "موافقة",
     reject: "رفض",
+    finalApprove: "الموافقة النهائية",
+    supervisorApproved: "وافق عليه المشرف",
     rejectionReasonPlaceholder: "سبب رفض طلب هذه القطعة...",
+
+    // Notifications
+    notifications: "الإشعارات",
+    markAllRead: "تعليم الكل كمقروء",
+    noNotifications: "لا توجد إشعارات بعد.",
+    assignedToWO: "تم تكليفك بأمر العمل",
 
     // Tickets
     tickets: "التذاكر",

@@ -35,6 +35,10 @@ const assetDbErrorMessage = (err, lang) => err?.code === "23505" ? t(lang,"dupli
 // Natural sort so "Site2" comes before "Site10" (plain string sort puts "Site10" first).
 const byNameNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
 const priorityColor = (p) => ({ Critical: C.red, High: C.accent, Medium: C.yellow, Low: C.green }[p] || C.muted);
+const notifyAssignee = (recipient, message, linkId) => {
+  if (!recipient) return;
+  return supabase.from("notifications").insert([{ id: uid("NTF"), recipient, type: "work_order", message, link_type: "work_order", link_id: linkId||null, read: false }]);
+};
 const statusColor = (s) => ({
   Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow,
   Operational: C.green, "Under Maintenance": C.accent, Degraded: C.red,
@@ -281,7 +285,8 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, onWorkOrde
     await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
     const newWO = { id: woId, title: `Breakdown — ${asset.name}: ${form.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: form.severity==="Critical"?"Critical":form.severity==="High"?"High":"Medium", status: "Open", assignee: null, start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id };
     const { error: woErr } = await supabase.from("work_orders").insert([newWO]);
-    if (!woErr && onWorkOrderCreated) onWorkOrderCreated(newWO);
+    if (woErr) { setError(`Breakdown saved, but its work order failed to create: ${woErr.message}`); setSaving(false); return; }
+    if (onWorkOrderCreated) onWorkOrderCreated(newWO);
     onReported(record);
     onClose();
     setSaving(false);
@@ -416,11 +421,11 @@ function BreakdownResolveModal({ breakdown, userRole, vendors, onClose, onResolv
   const submit = async () => {
     const now = new Date().toISOString();
     const hours = minutesBetween(breakdown.downtime_start, now);
-    const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
+    const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "engineer" || userRole?.role === "admin";
     const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
     await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: form.resolved_by, resolved_at: now, downtime_end: now, downtime_hours: hours, maintenance_notes: form.maintenance_notes, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", breakdown.id);
     // Asset stays Under Maintenance until Operator gives final confirmation
-    const isSupervisorOrAdmin2 = userRole?.role === "supervisor" || userRole?.role === "admin";
+    const isSupervisorOrAdmin2 = isSupervisorOrAdmin;
     const logRecord = { id: uid("LOG"), asset_id: breakdown.asset_id, asset_name: breakdown.asset_name, log_type: "Corrective Repair", title: `Breakdown Repair — ${breakdown.severity} severity`, description: `BREAKDOWN REPORTED BY: ${breakdown.reported_by}\n\nISSUE: ${breakdown.description}\n\nMAINTENANCE NOTES: ${form.maintenance_notes}`, performed_by: form.resolved_by, vendor: form.vendor === "— None —" ? null : form.vendor || null, start_date: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : TODAY, end_date: TODAY, cost: null, status: isSupervisorOrAdmin2 ? "Completed" : "In Progress", approval_status: isSupervisorOrAdmin2 ? "Approved" : "Pending", approved_by: isSupervisorOrAdmin2 ? userRole?.name : null, approved_at: isSupervisorOrAdmin2 ? new Date().toISOString() : null, breakdown_id: breakdown.id, downtime_start: breakdown.downtime_start ? breakdown.downtime_start.split("T")[0] : null, downtime_end: TODAY, downtime_hours: hours };
     await supabase.from("maintenance_logs").insert([logRecord]);
     if (breakdown.work_order_id) {
@@ -626,7 +631,7 @@ const onIssueReported = (record) => {
 
   const resolveIssue = async (issue) => {
     const now = new Date().toISOString();
-    const newStatus = (userRole?.role === "maintenance" || userRole?.role === "engineer") ? "Pending Supervisor Approval" : "Resolved";
+    const newStatus = userRole?.role === "maintenance" ? "Pending Supervisor Approval" : "Resolved";
     await supabase.from("issue_reports").update({ status: newStatus, resolved_by: userRole.name || "", resolved_at: now, supervisor_approved_by: newStatus === "Resolved" ? userRole?.name : null, supervisor_approved_at: newStatus === "Resolved" ? now : null }).eq("id", issue.id);
     if (issue.work_order_id && newStatus === "Resolved") await supabase.from("work_orders").update({ status: "Completed" }).eq("id", issue.work_order_id);
 
@@ -1126,19 +1131,9 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
       await supabase.from("work_orders").update({ status: "Completed" }).eq("id", log.work_order_id);
     }
 
-    const { data: parts } = await supabase.from("spare_parts").select("*").eq("log_id", log.id);
-    if (parts?.length) {
-      for (const part of parts) {
-        if (part.model_part_id) {
-          const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", part.model_part_id).single();
-          if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-(part.quantity||1)) }).eq("id", part.model_part_id);
-        }
-        if (part.asset_part_id) {
-          const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", part.asset_part_id).single();
-          if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-(part.quantity||1)) }).eq("id", part.asset_part_id);
-        }
-      }
-    }
+    // Note: spare parts on this log have their own supervisor -> engineer approval
+    // chain (see the Spare Parts Approval section on the work order) and deduct
+    // their own stock at that point — approving the log itself doesn't touch stock.
     onApproved(updated || { ...log, approval_status: "Approved", approved_by: userRole?.name, status: "Completed" });
     setSaving(false);
   };
@@ -1185,7 +1180,7 @@ function ApprovalSection({ log, lang, userRole, onApproved, onRejected }) {
     </div>
   );
 }
-function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance, vendors, lang, userRole }) {
+function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance, isEngineer, vendors, lang, userRole }) {
   const [logs, setLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -1194,6 +1189,9 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [rejectingPart, setRejectingPart] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [finalCostInputs, setFinalCostInputs] = useState({});
   const [expandedLog, setExpandedLog] = useState(null);
   const [parts, setParts] = useState({});
   const [showCatalog, setShowCatalog] = useState(false);
@@ -1268,7 +1266,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "engineer";
+    const needsApproval = userRole?.role === "maintenance";
     const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess(t(lang,"saving")); setLogs(prev => [record,...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" }); setShowForm(false); }
@@ -1284,9 +1282,55 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
     const rawPartId = partForm.asset_part_id;
     const isModelLevel = rawPartId && String(rawPartId).startsWith("mdl-");
     const cleanPartId = isModelLevel ? null : rawPartId || null;
-    const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanPartId };
+    const initialStatus = isEngineer ? "Approved" : isSupervisor ? "Supervisor Approved" : "Pending";
+    const now = new Date().toISOString();
+    const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanPartId,
+      approval_status: initialStatus,
+      supervisor_approved_by: initialStatus!=="Pending" ? userRole?.name : null, supervisor_approved_at: initialStatus!=="Pending" ? now : null,
+      approved_by: initialStatus==="Approved" ? userRole?.name : null, approved_at: initialStatus==="Approved" ? now : null };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
-    if (err) { setError(err.message); } else { setSuccess("✓"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null }); setShowPartForm(null); }
+    if (err) { setError(err.message); } else {
+      setSuccess("✓"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null }); setShowPartForm(null);
+      if (initialStatus==="Approved" && cleanPartId) {
+        const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanPartId).single();
+        if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", cleanPartId);
+      }
+    }
+    setSaving(false);
+  };
+
+  const approvePartSupervisor = async (part, logId) => {
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now, rejection_reason: null }).eq("id", part.id);
+    if (err) { setError(err.message); } else {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now } : p) }));
+    }
+    setSaving(false);
+  };
+
+  const approvePartEngineer = async (part, logId, finalUnitCost) => {
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const unitCost = parseFloat(finalUnitCost)||0;
+    const totalCost = unitCost * part.quantity;
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, rejection_reason: null }).eq("id", part.id);
+    if (err) { setError(err.message); } else {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost } : p) }));
+      if (part.asset_part_id) {
+        const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", part.asset_part_id).single();
+        if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-part.quantity) }).eq("id", part.asset_part_id);
+      }
+    }
+    setSaving(false);
+  };
+
+  const rejectPart = async (part, logId, reason) => {
+    setSaving(true); setError(null);
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Rejected", rejection_reason: reason||null }).eq("id", part.id);
+    if (err) { setError(err.message); } else {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Rejected", rejection_reason: reason||null } : p) }));
+    }
     setSaving(false);
   };
 
@@ -1352,7 +1396,7 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                         <div style={{ marginTop: 14 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{t(lang,"spareParts")}</div>
-                            {isSupervisor && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>{t(lang,"addPart")}</Btn>}
+                            {isMaintenance && <Btn small onClick={() => setShowPartForm(showPartForm===log.id?null:log.id)}>{t(lang,"addPart")}</Btn>}
                           </div>
                           {showPartForm===log.id && (
                             <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
@@ -1385,20 +1429,57 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                             <div style={{ overflowX: "auto" }}>
                               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                                 <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                                  {[t(lang,"partName"),t(lang,"partNumber"),t(lang,"quantity"),"Unit","Total",t(lang,"supplier"),...(isAdmin?[""]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>)}
+                                  {[t(lang,"partName"),t(lang,"partNumber"),t(lang,"quantity"),"Unit","Total",t(lang,"supplier"),t(lang,"partApproval"),...(isAdmin?[""]:[])].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>{h}</th>)}
                                 </tr></thead>
                                 <tbody>
-                                  {parts[log.id].map(part => (
-                                    <tr key={part.id} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                                  {parts[log.id].map(part => ([
+                                    <tr key={part.id} style={{ borderBottom: rejectingPart===part.id?"none":`1px solid ${C.border}22` }}>
                                       <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{part.part_name}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle, fontFamily: "monospace", fontSize: 11 }}>{part.part_number||"—"}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle }}>{part.quantity}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle }}>{part.unit_cost?`$${part.unit_cost}`:"—"}</td>
                                       <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost?`$${part.total_cost}`:"—"}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
+                                      <td style={{ padding: "8px 10px" }}>
+                                        <Badge label={part.approval_status==="Approved"?t(lang,"approved"):part.approval_status==="Rejected"?t(lang,"rejected"):part.approval_status==="Supervisor Approved"?t(lang,"supervisorApproved"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:part.approval_status==="Supervisor Approved"?C.blue:C.yellow} />
+                                        {isSupervisor && !isEngineer && part.approval_status==="Pending" && (
+                                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                            <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.green}>✓ {t(lang,"approve")}</Btn>
+                                            <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                          </div>
+                                        )}
+                                        {isEngineer && part.approval_status==="Pending" && (
+                                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                            <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.blue}>✓ {t(lang,"approve")} ({t(lang,"supervisorRole")})</Btn>
+                                            <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                          </div>
+                                        )}
+                                        {isEngineer && part.approval_status==="Supervisor Approved" && (
+                                          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 140 }}>
+                                            <input value={finalCostInputs[part.id] ?? part.unit_cost ?? ""} onChange={e => setFinalCostInputs(prev => ({ ...prev, [part.id]: e.target.value }))} type="number" placeholder={t(lang,"unitCostLabel")}
+                                              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }} />
+                                            <div style={{ display: "flex", gap: 6 }}>
+                                              <Btn small onClick={() => approvePartEngineer(part, log.id, finalCostInputs[part.id] ?? part.unit_cost)} disabled={saving} color={C.green}>✓ {t(lang,"finalApprove")}</Btn>
+                                              <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </td>
                                       {isAdmin && <td style={{ padding: "8px 10px" }}><Btn small variant="danger" onClick={() => deletePart(part.id, log.id)}>{t(lang,"del")}</Btn></td>}
-                                    </tr>
-                                  ))}
+                                    </tr>,
+                                    rejectingPart===part.id ? (
+                                      <tr key={part.id+"-reject"} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                                        <td colSpan={isAdmin?8:7} style={{ padding: "0 10px 10px" }}>
+                                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                            <input value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder={t(lang,"rejectionReasonPlaceholder")}
+                                              style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 12 }} />
+                                            <Btn small variant="danger" onClick={() => { rejectPart(part, log.id, rejectReason); setRejectingPart(null); }} disabled={saving}>{t(lang,"confirm")}</Btn>
+                                            <Btn small variant="secondary" onClick={() => setRejectingPart(null)}>{t(lang,"cancel")}</Btn>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    ) : null
+                                  ]))}
                                   <tr style={{ borderTop: `1px solid ${C.border}` }}>
                                     <td colSpan={4} style={{ padding: "8px 10px", color: C.muted, fontSize: 11 }}>Total</td>
                                     <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>${parts[log.id].reduce((s,p) => s+(p.total_cost||0),0).toLocaleString()}</td>
@@ -1560,6 +1641,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
   const [savingAssignee, setSavingAssignee] = useState(false);
   const [rejectingPart, setRejectingPart] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [finalCostInputs, setFinalCostInputs] = useState({});
   const [parts, setParts] = useState({});
   const [catalogParts, setCatalogParts] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
@@ -1619,14 +1701,17 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
   const saveAssignee = async () => {
     setSavingAssignee(true); setError(null);
     const { error: err } = await supabase.from("work_orders").update({ assignee: assignee||null }).eq("id", wo.id);
-    if (err) { setError(err.message); } else { setEditingAssignee(false); }
+    if (err) { setError(err.message); } else {
+      setEditingAssignee(false);
+      if (assignee && assignee !== wo.assignee) await notifyAssignee(assignee, `${t(lang,"assignedToWO")}: ${wo.title} (${wo.id})`, wo.id);
+    }
     setSavingAssignee(false);
   };
 
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "engineer";
+    const needsApproval = userRole?.role === "maintenance";
     const asset = (assets||[]).find(a => a.name === wo.asset);
     const record = { id: uid("LOG"), asset_id: asset?.id||null, asset_name: wo.asset, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval?"In Progress":"Completed", approval_status: needsApproval?"Pending":"Approved", approved_by: needsApproval?null:userRole?.name, approved_at: needsApproval?null:new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start&&form.downtime_end)?Math.round((new Date(form.downtime_end)-new Date(form.downtime_start))/(1000*60*60)):null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
@@ -1649,8 +1734,15 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
     const assetForPart = (assets||[]).find(a => a.name === wo.asset);
-    const autoApprove = isEngineer;
-    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId, approval_status: autoApprove?"Approved":"Pending", approved_by: autoApprove?userRole?.name:null, approved_at: autoApprove?new Date().toISOString():null };
+    // Requesting maintenance waits for supervisor, then engineer's final cost sign-off.
+    // A supervisor/admin adding it themselves skips straight to awaiting the engineer.
+    // An engineer adding it themselves is the final word already — auto-approved.
+    const initialStatus = isEngineer ? "Approved" : isSupervisor ? "Supervisor Approved" : "Pending";
+    const now = new Date().toISOString();
+    const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId,
+      approval_status: initialStatus,
+      supervisor_approved_by: initialStatus!=="Pending" ? userRole?.name : null, supervisor_approved_at: initialStatus!=="Pending" ? now : null,
+      approved_by: initialStatus==="Approved" ? userRole?.name : null, approved_at: initialStatus==="Approved" ? now : null };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
       setSuccess("✓");
@@ -1658,7 +1750,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
       setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
       setShowPartForm(null);
       setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) + (qty*unitCost) } : l));
-      if (autoApprove) await deductPartStock(cleanModelPartId, cleanAssetPartId, qty);
+      if (initialStatus==="Approved") await deductPartStock(cleanModelPartId, cleanAssetPartId, qty);
     }
     setSaving(false);
   };
@@ -1674,12 +1766,27 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     }
   };
 
-  const approvePart = async (part, logId) => {
+  // Stage 1: supervisor signs off on the request itself (not the cost).
+  const approvePartSupervisor = async (part, logId) => {
     setSaving(true); setError(null);
     const now = new Date().toISOString();
-    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, rejection_reason: null }).eq("id", part.id);
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now, rejection_reason: null }).eq("id", part.id);
     if (err) { setError(err.message); } else {
-      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now } : p) }));
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now } : p) }));
+    }
+    setSaving(false);
+  };
+
+  // Stage 2: engineer gives the final word and confirms/sets the actual cost.
+  const approvePartEngineer = async (part, logId, finalUnitCost) => {
+    setSaving(true); setError(null);
+    const now = new Date().toISOString();
+    const unitCost = parseFloat(finalUnitCost)||0;
+    const totalCost = unitCost * part.quantity;
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, rejection_reason: null }).eq("id", part.id);
+    if (err) { setError(err.message); } else {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost } : p) }));
+      setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) - (part.total_cost||0) + totalCost } : l));
       await deductPartStock(part.model_part_id, part.asset_part_id, part.quantity);
     }
     setSaving(false);
@@ -1798,7 +1905,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
                 <Input label={t(lang,"backToOperationLabel")} value={form.downtime_end} onChange={f("downtime_end")} type="date" />
               </div>
               <div style={{ marginTop: 12 }}><Textarea label={t(lang,"descriptionNotes")} value={form.description} onChange={f("description")} /></div>
-              {(userRole?.role === "maintenance" || userRole?.role === "engineer") && (
+              {userRole?.role === "maintenance" && (
                 <div style={{ marginTop: 10, background: C.yellow+"11", border: `1px solid ${C.yellow}33`, borderRadius: 6, padding: "8px 12px", fontSize: 12, color: C.yellow }}>
                   ⏳ {t(lang,"approvalRequired")} — {t(lang,"pendingApproval")}
                 </div>
@@ -1885,11 +1992,27 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
                                     <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost?`$${part.total_cost}`:"—"}</td>
                                     <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
                                     <td style={{ padding: "8px 10px" }}>
-                                      <Badge label={part.approval_status==="Approved"?t(lang,"approved"):part.approval_status==="Rejected"?t(lang,"rejected"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:C.yellow} />
+                                      <Badge label={part.approval_status==="Approved"?t(lang,"approved"):part.approval_status==="Rejected"?t(lang,"rejected"):part.approval_status==="Supervisor Approved"?t(lang,"supervisorApproved"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:part.approval_status==="Supervisor Approved"?C.blue:C.yellow} />
+                                      {isSupervisor && !isEngineer && part.approval_status==="Pending" && (
+                                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                          <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.green}>✓ {t(lang,"approve")}</Btn>
+                                          <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                        </div>
+                                      )}
                                       {isEngineer && part.approval_status==="Pending" && (
                                         <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                          <Btn small onClick={() => approvePart(part, log.id)} disabled={saving} color={C.green}>✓ {t(lang,"approve")}</Btn>
+                                          <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.blue}>✓ {t(lang,"approve")} ({t(lang,"supervisorRole")})</Btn>
                                           <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                        </div>
+                                      )}
+                                      {isEngineer && part.approval_status==="Supervisor Approved" && (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 140 }}>
+                                          <input value={finalCostInputs[part.id] ?? part.unit_cost ?? ""} onChange={e => setFinalCostInputs(prev => ({ ...prev, [part.id]: e.target.value }))} type="number" placeholder={t(lang,"unitCostLabel")}
+                                            style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }} />
+                                          <div style={{ display: "flex", gap: 6 }}>
+                                            <Btn small onClick={() => approvePartEngineer(part, log.id, finalCostInputs[part.id] ?? part.unit_cost)} disabled={saving} color={C.green}>✓ {t(lang,"finalApprove")}</Btn>
+                                            <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
+                                          </div>
                                         </div>
                                       )}
                                     </td>
@@ -2060,6 +2183,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
         const { data: vd } = await supabase.from("vendors").select("id, open_orders").eq("name", vendorName).single();
         if (vd) await supabase.from("vendors").update({ open_orders: (vd.open_orders||0)+1 }).eq("id", vd.id);
       }
+      if (assigneeName) await notifyAssignee(assigneeName, `${t(lang,"assignedToWO")}: ${record.title} (${record.id})`, record.id);
       setForm({ title: "", asset: "", category: "MHE", priority: "Medium", start_date: "", due: "", vendor: "", site: "", action_plan: "", target_date: "", assignee: "" });
       setManualAsset(false);
       setShowForm(false);
@@ -2610,7 +2734,7 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels, sites, error }
     </div>
   );
 }
-function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMaintenance, vendors, lang, userRole, sites }) {
+function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMaintenance, isEngineer, vendors, lang, userRole, sites }) {
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
@@ -2678,7 +2802,7 @@ const filtered = assets.filter(a =>
     <div>
       {editItem && <AssetEditModal lang={lang} data={editItem} mheModels={mheModels} sites={sites} error={error} onSave={saveEdit} onClose={() => { setEditItem(null); setError(null); }} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
-      {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} userRole={userRole} />}
+      {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} userRole={userRole} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 18 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t(lang,"searchAssets")} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 12px", color: C.text, fontSize: 13, flex: "1 1 180px" }} />
@@ -4290,12 +4414,14 @@ export default function App() {
   const [workOrders, setWorkOrders] = useState([]); const [assets, setAssets] = useState([]); const [vendors, setVendors] = useState([]); const [issues, setIssues] = useState([]);
   const [sites, setSites] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
   const isAdmin = session?.user?.email === ADMIN_EMAIL || userRole.role === "admin";
   const isSupervisor = userRole.role === "supervisor" || isAdmin;
   const isMaintenance = userRole.role === "maintenance" || userRole.role === "engineer" || userRole.role === "supervisor" || isAdmin;
-  const isEngineer = userRole.role === "engineer" || isSupervisor;
+  const isEngineer = userRole.role === "engineer" || isAdmin;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthLoading(false); });
@@ -4341,6 +4467,26 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (session) load(); }, [session, load]);
+
+  const loadNotifications = useCallback(async () => {
+    if (!userRole.name) return;
+    const { data, error: err } = await supabase.from("notifications").select("*").eq("recipient", userRole.name).order("created_at", { ascending: false }).limit(30);
+    if (!err) setNotifications(data||[]);
+  }, [userRole.name]);
+
+  useEffect(() => { if (session && userRole.name) loadNotifications(); }, [session, userRole.name, loadNotifications]);
+
+  const markNotificationRead = async (id) => {
+    await supabase.from("notifications").update({ read: true }).eq("id", id);
+    setNotifications(prev => prev.map(n => n.id===id ? { ...n, read: true } : n));
+  };
+  const markAllNotificationsRead = async () => {
+    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    if (!unreadIds.length) return;
+    await supabase.from("notifications").update({ read: true }).in("id", unreadIds);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+  const unreadNotifCount = notifications.filter(n => !n.read).length;
   const signOut = async () => { await supabase.auth.signOut(); setSession(null); };
 
   if (authLoading) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>Loading...</div>;
@@ -4379,6 +4525,28 @@ export default function App() {
             <button onClick={toggleLanguage} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.text, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
               {lang === "en" ? "🇸🇦 العربية" : "🇬🇧 English"}
             </button>
+            <div style={{ position: "relative" }}>
+              <button onClick={() => setShowNotifications(v => !v)} style={{ position: "relative", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.text, cursor: "pointer", fontSize: 14 }}>
+                🔔
+                {unreadNotifCount > 0 && <span style={{ position: "absolute", top: -4, right: -4, background: C.red, color: "#fff", borderRadius: 10, fontSize: 9, fontWeight: 700, padding: "1px 5px", minWidth: 14, textAlign: "center" }}>{unreadNotifCount}</span>}
+              </button>
+              {showNotifications && (
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, width: 320, maxHeight: 400, overflowY: "auto", boxShadow: "0 8px 24px #00000044", zIndex: 2000 }}>
+                  <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: "uppercase" }}>{t(lang,"notifications")}</div>
+                    {unreadNotifCount > 0 && <button onClick={markAllNotificationsRead} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11 }}>{t(lang,"markAllRead")}</button>}
+                  </div>
+                  {notifications.length === 0 ? (
+                    <div style={{ padding: 20, textAlign: "center", color: C.muted, fontSize: 12 }}>{t(lang,"noNotifications")}</div>
+                  ) : notifications.map(n => (
+                    <div key={n.id} onClick={() => !n.read && markNotificationRead(n.id)} style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}22`, background: n.read?"transparent":C.accent+"11", cursor: n.read?"default":"pointer" }}>
+                      <div style={{ fontSize: 12, color: C.text }}>{n.message}</div>
+                      <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>{fmtDateTime(n.created_at)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <span style={{ background: roleColor+"22", color: roleColor, border: `1px solid ${roleColor}44`, borderRadius: 4, padding: "3px 8px", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon} {roleLabel}</span>
             <div style={{ fontSize: 11, color: C.muted, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userRole.name || session.user.email}</div>
             <button onClick={signOut} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.muted, cursor: "pointer", fontSize: 12 }}>{t(lang,"signOut")}</button>
@@ -4396,7 +4564,7 @@ export default function App() {
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
-        {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
+        {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
         {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} isSupervisor={isSupervisor} />}

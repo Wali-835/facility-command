@@ -116,7 +116,7 @@ const SectionHeader = ({ title, onBack }) => (
 );
 
 // ─── CHECKLIST VIEW ───────────────────────────────────────────────────────────
-function ChecklistView({ asset, userRole, onDone, onBack }) {
+function ChecklistView({ asset, userRole, workOrderId, onDone, onBack }) {
   const [items, setItems] = useState([]);
   const [responses, setResponses] = useState({});
   const [executionId, setExecutionId] = useState(null);
@@ -157,7 +157,7 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
     const now = new Date();
     const execId = uid("EXC");
     const { data: checklists } = await supabase.from("checklists").select("id").limit(1);
-    await supabase.from("checklist_executions").insert([{ id: execId, checklist_id: checklists[0].id, asset_id: asset.id, asset_name: asset.name, executed_by: executedBy, execution_date: TODAY, month: now.getMonth()+1, year: now.getFullYear(), status: "In Progress" }]);
+    await supabase.from("checklist_executions").insert([{ id: execId, checklist_id: checklists[0].id, asset_id: asset.id, asset_name: asset.name, work_order_id: workOrderId||null, executed_by: executedBy, execution_date: TODAY, month: now.getMonth()+1, year: now.getFullYear(), status: "In Progress" }]);
     setExecutionId(execId);
   };
 
@@ -190,11 +190,13 @@ function ChecklistView({ asset, userRole, onDone, onBack }) {
     const naCount = Object.values(responses).filter(r => r.result==="N/A").length;
     const defects = items.filter(i => responses[i.id]?.result==="FAIL").map(i => `- ${i.item_en}: ${responses[i.id]?.notes||"No notes"}`).join("\n");
     const description = `CIL Checklist completed by ${executedBy}\n\nResults: ${passCount} PASS · ${failCount} FAIL · ${naCount} N/A\n${defects ? `\nDefects:\n${defects}` : "\nNo defects found."}`;
-    const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: "In Progress", approval_status: "Pending", checklist_execution_id: executionId, downtime_start: null, downtime_end: null, downtime_hours: null };
+    const logRecord = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: "Preventive Maintenance", title: `CIL Checklist — ${new Date().toLocaleString("default", { month: "long", year: "numeric" })}`, description, performed_by: executedBy, vendor: null, start_date: TODAY, end_date: TODAY, cost: null, status: "In Progress", approval_status: "Pending", work_order_id: workOrderId||null, checklist_execution_id: executionId, downtime_start: null, downtime_end: null, downtime_hours: null };
     const { error: logErr } = await supabase.from("maintenance_logs").insert([logRecord]);
     if (logErr) { setError(logErr.message); setSaving(false); return; }
-    const { data: openWOs } = await supabase.from("work_orders").select("id").eq("asset", asset.name).in("status", ["Open","In Progress","Pending"]).ilike("title","PM - %");
-    if (openWOs?.length) await supabase.from("work_orders").update({ status: "Completed" }).in("id", openWOs.map(w => w.id));
+    if (workOrderId) {
+      const { error: woErr } = await supabase.from("work_orders").update({ status: "Awaiting Approval" }).eq("id", workOrderId);
+      if (woErr) { setError(woErr.message); setSaving(false); return; }
+    }
     onDone();
     setSaving(false);
   };
@@ -301,6 +303,7 @@ export default function AssetPage() {
   const [catalogParts, setCatalogParts] = useState([]);
   const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
   const [updateNote, setUpdateNote] = useState("");
+  const [checklistWO, setChecklistWO] = useState(null);
 
   const assetId = new URLSearchParams(window.location.search).get("asset");
 
@@ -308,7 +311,7 @@ export default function AssetPage() {
   const isAdmin = userRole?.role === "admin";
   const isSupervisor = userRole?.role === "supervisor" || isAdmin;
   const isMaintenance = userRole?.role === "maintenance" || userRole?.role === "engineer" || isSupervisor;
-  const isEngineer = userRole?.role === "engineer" || isSupervisor;
+  const isEngineer = userRole?.role === "engineer" || isAdmin;
   const isOperations = userRole?.role === "operations";
 
   useEffect(() => {
@@ -411,7 +414,8 @@ export default function AssetPage() {
     if (err) { setError(err.message); } else {
       await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
       setAsset(prev => ({ ...prev, status: "Under Maintenance" }));
-      await supabase.from("work_orders").insert([{ id: woId, title: `Breakdown — ${asset.name}: ${brkForm.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: brkForm.severity==="Critical"?"Critical":brkForm.severity==="High"?"High":"Medium", status: "Open", start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id }]);
+      const { error: woErr } = await supabase.from("work_orders").insert([{ id: woId, title: `Breakdown — ${asset.name}: ${brkForm.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: brkForm.severity==="Critical"?"Critical":brkForm.severity==="High"?"High":"Medium", status: "Open", start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id }]);
+      if (woErr) console.error("Work order creation failed:", woErr.message);
       try {
         await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/notify-breakdown", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }, body: JSON.stringify({ breakdown: record, type: "reported" }) });
       } catch (e) { console.error(e); }
@@ -482,7 +486,7 @@ export default function AssetPage() {
     const downtimeStartTs = resolveForm.downtime_start;
     const mins = downtimeStartTs ? Math.round((new Date(now) - new Date(downtimeStartTs.endsWith("Z") ? downtimeStartTs : downtimeStartTs+"Z")) / (1000*60)) : null;
     const downtimeStartDate = downtimeStartTs ? downtimeStartTs.split("T")[0] : TODAY;
-    const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
+    const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "engineer" || userRole?.role === "admin";
     const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
     await supabase.from("breakdown_reports").update({ status: newStatus, resolved_by: userRole?.name, resolved_at: now, downtime_end: now, downtime_hours: mins, maintenance_notes: resolveForm.notes, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", resolveForm.breakdown_id);
     await supabase.from("maintenance_logs").insert([{
@@ -519,7 +523,7 @@ export default function AssetPage() {
   const submitLog = async () => {
     if (!logForm.title) { setError("Title is required."); return; }
     setSaving(true);
-    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "engineer";
+    const needsApproval = userRole?.role === "maintenance";
     const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: logForm.log_type, title: logForm.title, description: logForm.description, performed_by: logForm.performed_by || userRole?.name, vendor: logForm.vendor==="— None —"?null:logForm.vendor||null, start_date: TODAY, end_date: TODAY, cost: logForm.cost ? parseFloat(logForm.cost) : null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString() };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else {
@@ -551,16 +555,19 @@ export default function AssetPage() {
     const isModelLevel = rawId && String(rawId).startsWith("mdl-");
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
-    const record = { id: uid("PRT"), log_id: partForm.log_id, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty * unitCost, supplier: partForm.supplier, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId };
+    const initialStatus = isEngineer ? "Approved" : isSupervisor ? "Supervisor Approved" : "Pending";
+    const now = new Date().toISOString();
+    const record = { id: uid("PRT"), log_id: partForm.log_id, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty * unitCost, supplier: partForm.supplier, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId,
+      approval_status: initialStatus,
+      supervisor_approved_by: initialStatus!=="Pending" ? userRole?.name : null, supervisor_approved_at: initialStatus!=="Pending" ? now : null,
+      approved_by: initialStatus==="Approved" ? userRole?.name : null, approved_at: initialStatus==="Approved" ? now : null };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
-      // Deduct stock if log is approved
-      const log = logs.find(l => l.id === partForm.log_id);
-      if (log?.approval_status === "Approved") {
+      if (initialStatus==="Approved") {
         if (cleanModelPartId) { const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", cleanModelPartId).single(); if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-qty) }).eq("id", cleanModelPartId); }
         if (cleanAssetPartId) { const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanAssetPartId).single(); if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", cleanAssetPartId); }
       }
-      setSuccess("Spare part added!");
+      setSuccess(initialStatus==="Pending" ? "Spare part requested — awaiting supervisor approval." : initialStatus==="Supervisor Approved" ? "Spare part requested — awaiting engineer's final approval." : "Spare part added!");
       setPartForm({ log_id: "", part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
     }
     setSaving(false);
@@ -570,13 +577,8 @@ export default function AssetPage() {
   const approveLog = async (logId) => {
     const now = new Date().toISOString();
     await supabase.from("maintenance_logs").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, status: "Completed" }).eq("id", logId);
-    const { data: parts } = await supabase.from("spare_parts").select("*").eq("log_id", logId);
-    if (parts?.length) {
-      for (const part of parts) {
-        if (part.model_part_id) { const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", part.model_part_id).single(); if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-(part.quantity||1)) }).eq("id", part.model_part_id); }
-        if (part.asset_part_id) { const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", part.asset_part_id).single(); if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-(part.quantity||1)) }).eq("id", part.asset_part_id); }
-      }
-    }
+    // Spare parts on this log have their own supervisor -> engineer approval chain
+    // and deduct their own stock at that point — approving the log doesn't touch stock.
     setLogs(prev => prev.map(l => l.id===logId?{...l,approval_status:"Approved",approved_by:userRole?.name,status:"Completed"}:l));
     setSuccess("Log approved!");
   };
@@ -685,7 +687,6 @@ export default function AssetPage() {
                 <Btn onClick={() => { loadBreakdownsAndIssues(); setView("breakdowns"); }} color={C.red}>🚨 {t(lang,"breakdownsAndIssues")}</Btn>
                 <Btn onClick={() => { loadBreakdownsAndIssues(); setView("workorders"); }} color={C.blue}>📋 {t(lang,"workOrders")}</Btn>
                 <Btn onClick={() => { loadLogs(); loadCatalog(); setView("log"); }} color={C.blue}>🔧 {t(lang,"addMaintenanceLog")}</Btn>
-                <Btn onClick={() => setView("checklist")} color={C.green}>📋 {t(lang,"runCILChecklist")}</Btn>
                 <Btn onClick={() => { loadLogs(); setView("parts"); }} color={C.purple}>🔩 {t(lang,"addPart")}</Btn>
                 <Btn onClick={() => setView("specs")} secondary>📄 Equipment Specs</Btn>
                 <Btn onClick={() => { loadLogs(); setView("history"); }} secondary>📜 {t(lang,"maintenanceHistory")}</Btn>
@@ -812,7 +813,7 @@ export default function AssetPage() {
                           {i.status === "Open" && <Btn small onClick={async () => { await supabase.from("issue_reports").update({ status: "Acknowledged", acknowledged_by: userRole?.name, acknowledged_at: new Date().toISOString() }).eq("id", i.id); setIssues(prev => prev.map(x => x.id===i.id?{...x,status:"Acknowledged"}:x)); }} color={C.blue}>👁 Acknowledge</Btn>}
                           <PasswordConfirm actionLabel="✅ Resolve Issue" color={C.green} onConfirmed={async () => {
                             const now = new Date().toISOString();
-                            const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "admin";
+                            const isSupervisorOrAdmin = userRole?.role === "supervisor" || userRole?.role === "engineer" || userRole?.role === "admin";
                             const newStatus = isSupervisorOrAdmin ? "Pending Operator Confirmation" : "Pending Supervisor Approval";
                             await supabase.from("issue_reports").update({ status: newStatus, resolved_by: userRole?.name, resolved_at: now, supervisor_approved_by: isSupervisorOrAdmin ? userRole?.name : null, supervisor_approved_at: isSupervisorOrAdmin ? now : null }).eq("id", i.id);
                             setIssues(prev => prev.map(x => x.id===i.id?{...x,status:newStatus}:x));
@@ -860,7 +861,7 @@ export default function AssetPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {workOrders.map(wo => (
-                <WOCard key={wo.id} wo={wo} isMaintenance={isMaintenance} isSupervisor={isSupervisor} onUpdate={updateWOStatus} />
+                <WOCard key={wo.id} wo={wo} isMaintenance={isMaintenance} isSupervisor={isSupervisor} onUpdate={updateWOStatus} onRunChecklist={w => { setChecklistWO(w); setView("checklist"); }} />
               ))}
             </div>
           )}
@@ -870,7 +871,7 @@ export default function AssetPage() {
         <div>
           <SectionHeader title="🔧 Add Maintenance Log" onBack={() => setView("home")} />
           <div style={{ background: C.card, border: `1px solid ${C.blue}44`, borderRadius: 12, padding: 20 }}>
-            {(userRole?.role === "maintenance" || userRole?.role === "engineer") && (
+            {userRole?.role === "maintenance" && (
               <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}33`, borderRadius: 8, padding: 10, fontSize: 13, color: C.yellow, marginBottom: 14 }}>
                 ⏳ This log will need supervisor approval before it's closed.
               </div>
@@ -927,7 +928,7 @@ export default function AssetPage() {
         </div>
 
       ) : view === "checklist" ? (
-        <ChecklistView asset={asset} userRole={userRole} onDone={() => { setView("home"); setSuccess("Checklist completed!"); }} onBack={() => setView("home")} />
+        <ChecklistView asset={asset} userRole={userRole} workOrderId={checklistWO?.id} onDone={() => { setChecklistWO(null); loadBreakdownsAndIssues(); setView("workorders"); setSuccess("Checklist completed!"); }} onBack={() => { setChecklistWO(null); setView("workorders"); }} />
 
       ) : view === "specs" ? (
         <div>
@@ -1032,13 +1033,14 @@ function QROperatorConfirm({ record, table, userRole, onDone }) {
   );
 }
 // ─── WORK ORDER CARD ──────────────────────────────────────────────────────────
-function WOCard({ wo, isMaintenance, isSupervisor, onUpdate }) {
+function WOCard({ wo, isMaintenance, isSupervisor, onUpdate, onRunChecklist }) {
   const [expanded, setExpanded] = useState(false);
   const [showUpdate, setShowUpdate] = useState(false);
   const [newStatus, setNewStatus] = useState(wo.status);
   const [note, setNote] = useState(wo.status_note || "");
   const isOverdue = wo.due && wo.due <= new Date().toISOString().split("T")[0] && wo.status !== "Completed";
   const WO_STATUSES = ["Open","In Progress","Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled","Completed"];
+  const isPMChecklistEligible = wo.title?.startsWith("PM -") && wo.category === "MHE";
 
   return (
     <div style={{ background: "#1a1e2a", border: `1px solid ${isOverdue?"#ef444444":wo.status==="Completed"?"#22c55e44":"#252b3b"}`, borderRadius: 10, overflow: "hidden" }}>
@@ -1056,6 +1058,9 @@ function WOCard({ wo, isMaintenance, isSupervisor, onUpdate }) {
       </div>
       {expanded && isMaintenance && wo.status !== "Completed" && (
         <div style={{ padding: "0 14px 14px", borderTop: "1px solid #252b3b" }}>
+          {isPMChecklistEligible && (
+            <button onClick={() => onRunChecklist(wo)} style={{ background: "#22c55e22", color: "#22c55e", border: "1px solid #22c55e44", borderRadius: 8, padding: "10px", width: "100%", fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 12 }}>📋 Run CIL Checklist</button>
+          )}
           {!showUpdate ? (
             <button onClick={() => setShowUpdate(true)} style={{ background: "#3b82f622", color: "#3b82f6", border: "1px solid #3b82f644", borderRadius: 8, padding: "10px", width: "100%", fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 12 }}>✏️ Update Status</button>
           ) : (
