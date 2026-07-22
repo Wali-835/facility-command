@@ -114,7 +114,7 @@ export const translations = {
 
     // Engineer role
     engineerRole: "Engineer",
-    engineerDesc: "Approves or rejects spare-parts requests on work orders.",
+    engineerDesc: "Outranks supervisor — approves/rejects spare-parts requests, and everything a supervisor can do, without waiting for anyone's approval.",
 
     // Spare-parts approval
     partApproval: "Approval",
@@ -614,7 +614,7 @@ breakdownsAndIssues: "Breakdowns & Issues",
 
     // Engineer role
     engineerRole: "مهندس",
-    engineerDesc: "يوافق أو يرفض طلبات قطع الغيار في أوامر العمل.",
+    engineerDesc: "أعلى رتبة من المشرف — يوافق أو يرفض طلبات قطع الغيار، ولديه كل صلاحيات المشرف، دون انتظار موافقة أحد.",
 
     // Spare-parts approval
     partApproval: "الموافقة",

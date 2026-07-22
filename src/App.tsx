@@ -3325,7 +3325,7 @@ const filtered = assets.filter(a =>
                   <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"logChecklist")}</button>
                   <button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"qrCode")}</button>
                   {isMaintenance && <button onClick={() => setDocsAsset(a)} style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"documents")}</button>}
-                  {isSupervisor && <button onClick={() => setInsuranceAsset(a)} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🛡️ {t(lang,"insurance")}</button>}
+                  {isEngineer && <button onClick={() => setInsuranceAsset(a)} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🛡️ {t(lang,"insurance")}</button>}
                   {isAdmin && <><Btn small onClick={() => setEditItem(a)} color={C.accent}>{t(lang,"edit")}</Btn><Btn small variant="danger" onClick={() => setDeleteItem(a)}>{t(lang,"del")}</Btn></>}
                 </div>
               </div>
@@ -3849,7 +3849,7 @@ function LowStockAlerts({ lang, isSupervisor }) {
     </div>
   );
 }
-function InsuranceExpiryAlerts({ lang, isSupervisor }) {
+function InsuranceExpiryAlerts({ lang, isEngineer }) {
   const [expiring, setExpiring] = useState([]);
   useEffect(() => {
     const soon = new Date(); soon.setDate(soon.getDate()+30);
@@ -3863,7 +3863,7 @@ function InsuranceExpiryAlerts({ lang, isSupervisor }) {
       setExpiring((pRes.data||[]).map(p => ({ ...p, assetCount: counts[p.id]||0 })));
     });
   }, []);
-  if (!expiring.length || !isSupervisor) return null;
+  if (!expiring.length || !isEngineer) return null;
   return (
     <div style={{ background: C.red+"11", border: `1px solid ${C.red}44`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 10 }}>🛡️ {t(lang,"insuranceExpiringAlerts")} ({expiring.length})</div>
@@ -3879,7 +3879,7 @@ function InsuranceExpiryAlerts({ lang, isSupervisor }) {
     </div>
   );
 }
-function Overview({ workOrders, assets, vendors, lang, isSupervisor }) {
+function Overview({ workOrders, assets, vendors, lang, isSupervisor, isEngineer }) {
   const open=workOrders.filter(w => w.status!=="Completed").length;
   const critical=workOrders.filter(w => w.priority==="Critical").length;
   const opAssets=assets.filter(a => a.status==="Operational").length;
@@ -3898,7 +3898,7 @@ function Overview({ workOrders, assets, vendors, lang, isSupervisor }) {
         <StatCard icon="🤝" label={t(lang,"activeVendors")} value={activeVendors} sub={t(lang,"contractorsOnFile")} color={C.purple} />
       </div>
       <LowStockAlerts lang={lang} isSupervisor={isSupervisor} />
-      <InsuranceExpiryAlerts lang={lang} isSupervisor={isSupervisor} />
+      <InsuranceExpiryAlerts lang={lang} isEngineer={isEngineer} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>{t(lang,"recentWorkOrders")}</div>
@@ -4713,7 +4713,7 @@ function UserManagement({ lang, sites }) {
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addUser")}</Btn>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 24 }}>
-        {[["🏭",t(lang,"operationsRole"),"operations",t(lang,"operationsDesc"),C.green],["🔧",t(lang,"maintenancePersonnelRole"),"maintenance",t(lang,"maintenancePersonnelDesc"),C.blue],["🛠",t(lang,"engineerRole"),"engineer",t(lang,"engineerDesc"),C.purple],["👁",t(lang,"supervisorRole"),"supervisor",t(lang,"supervisorDesc"),C.purple],["★",t(lang,"adminRole"),"admin",t(lang,"adminDesc"),C.accent]].map(([icon,title,role,desc,color]) => (
+        {[["🏭",t(lang,"operationsRole"),"operations",t(lang,"operationsDesc"),C.green],["🔧",t(lang,"maintenancePersonnelRole"),"maintenance",t(lang,"maintenancePersonnelDesc"),C.blue],["👁",t(lang,"supervisorRole"),"supervisor",t(lang,"supervisorDesc"),C.purple],["🛠",t(lang,"engineerRole"),"engineer",t(lang,"engineerDesc"),C.purple],["★",t(lang,"adminRole"),"admin",t(lang,"adminDesc"),C.accent]].map(([icon,title,role,desc,color]) => (
           <div key={role} style={{ background: C.card, border: `1px solid ${color}44`, borderRadius: 8, padding: 14 }}>
             <div style={{ fontSize: 18, marginBottom: 6 }}>{icon}</div>
             <div style={{ fontSize: 13, fontWeight: 700, color }}>{title}</div>
@@ -4739,7 +4739,7 @@ function UserManagement({ lang, sites }) {
               ? <Input label={t(lang,"phone")} value={form.phone} onChange={f("phone")} type="tel" placeholder="01012345678" />
               : <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />}
             <Input label={t(lang,"fullName")} value={form.name} onChange={f("name")} />
-            <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","engineer","supervisor","admin"]} />
+            <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","supervisor","engineer","admin"]} />
             <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...sites.filter(s => s !== "— Select Site —")]} />
           </div>
           <div style={{ marginTop: 12 }}>
@@ -4904,7 +4904,7 @@ export default function App() {
   const [loading, setLoading] = useState({ workOrders: true, assets: true, vendors: true });
   const [globalError, setGlobalError] = useState(null);
   const isAdmin = session?.user?.email === ADMIN_EMAIL || userRole.role === "admin";
-  const isSupervisor = userRole.role === "supervisor" || isAdmin;
+  const isSupervisor = userRole.role === "supervisor" || userRole.role === "engineer" || isAdmin;
   const isMaintenance = userRole.role === "maintenance" || userRole.role === "engineer" || userRole.role === "supervisor" || isAdmin;
   const isEngineer = userRole.role === "engineer" || isAdmin;
 
@@ -4990,7 +4990,7 @@ export default function App() {
     ...(isSupervisor ? [t(lang,"pendingApprovalsSection")] : []),
     ...(userRole.role === "maintenance" || userRole.role === "engineer" ? [t(lang,"mySubmissions")] : []),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
-    ...(isSupervisor ? [t(lang,"insurance")] : []),
+    ...(isEngineer ? [t(lang,"insurance")] : []),
     ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users"), t(lang,"sitesManagement")] : []),
   ];
   const activeTab = tab || tabs[0];
@@ -5044,12 +5044,12 @@ export default function App() {
       </div>
       <div style={{ padding: "20px 16px", maxWidth: 1280, margin: "0 auto" }}>
         <ErrBanner msg={globalError} onDismiss={() => setGlobalError(null)} />
-        {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} />}
+        {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
         {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} lang={lang} sites={siteNames} />}
-        {activeTab===t(lang,"insurance") && isSupervisor && <InsuranceManagement assets={assets} isAdmin={isAdmin} lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"insurance") && isEngineer && <InsuranceManagement assets={assets} isAdmin={isAdmin} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}

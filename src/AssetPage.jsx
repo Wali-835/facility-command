@@ -311,7 +311,7 @@ export default function AssetPage() {
 
   // Role helpers
   const isAdmin = userRole?.role === "admin";
-  const isSupervisor = userRole?.role === "supervisor" || isAdmin;
+  const isSupervisor = userRole?.role === "supervisor" || userRole?.role === "engineer" || isAdmin;
   const isMaintenance = userRole?.role === "maintenance" || userRole?.role === "engineer" || isSupervisor;
   const isEngineer = userRole?.role === "engineer" || isAdmin;
   const isOperations = userRole?.role === "operations";
