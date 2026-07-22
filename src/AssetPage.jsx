@@ -398,7 +398,7 @@ export default function AssetPage() {
   };
 
   // ─── Breakdown Form ───────────────────────────────────────────────────────
-  const [brkForm, setBrkForm] = useState({ reported_by: userRole?.name || "", severity: "High", description: "" });
+  const [brkForm, setBrkForm] = useState({ reported_by: userRole?.name || "", severity: "High", description: "", target_date: "" });
 
   useEffect(() => { if (userRole?.name) setBrkForm(p => ({ ...p, reported_by: userRole.name })); }, [userRole]);
   const bf = (k) => (v) => setBrkForm(p => ({ ...p, [k]: v }));
@@ -409,19 +409,19 @@ export default function AssetPage() {
     setSaving(true);
     const now = new Date().toISOString();
     const woId = uid("WO");
-    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: brkForm.reported_by, reported_at: now, downtime_start: now, description: brkForm.description, severity: brkForm.severity, status: "Open", work_order_id: woId };
+    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: brkForm.reported_by, reported_at: now, downtime_start: now, description: brkForm.description, severity: brkForm.severity, status: "Open", work_order_id: woId, target_date: brkForm.target_date||null };
     const { error: err } = await supabase.from("breakdown_reports").insert([record]);
     if (err) { setError(err.message); } else {
       await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
       setAsset(prev => ({ ...prev, status: "Under Maintenance" }));
-      const { error: woErr } = await supabase.from("work_orders").insert([{ id: woId, title: `Breakdown — ${asset.name}: ${brkForm.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: brkForm.severity==="Critical"?"Critical":brkForm.severity==="High"?"High":"Medium", status: "Open", start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id }]);
+      const { error: woErr } = await supabase.from("work_orders").insert([{ id: woId, title: `Breakdown — ${asset.name}: ${brkForm.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: brkForm.severity==="Critical"?"Critical":brkForm.severity==="High"?"High":"Medium", status: "Open", start_date: now.split("T")[0], due: brkForm.target_date||null, vendor: null, site: asset.location, breakdown_id: record.id }]);
       if (woErr) console.error("Work order creation failed:", woErr.message);
       try {
         await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/notify-breakdown", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }, body: JSON.stringify({ breakdown: record, type: "reported" }) });
       } catch (e) { console.error(e); }
       setSuccess("Breakdown reported! Maintenance team notified.");
       setView("home");
-      setBrkForm({ reported_by: "", severity: "High", description: "" });
+      setBrkForm({ reported_by: "", severity: "High", description: "", target_date: "" });
     }
     setSaving(false);
   };
@@ -705,6 +705,7 @@ export default function AssetPage() {
               </div>
               <Sel label="Severity" value={brkForm.severity} onChange={bf("severity")} options={["Critical","High","Medium","Low"]} />
               <Textarea label="Describe the issue *" value={brkForm.description} onChange={bf("description")} placeholder="What happened? Any error messages?" />
+              <Input label={t(lang,"targetResolutionDate")} value={brkForm.target_date} onChange={bf("target_date")} type="date" />
               <div style={{ background: C.yellow+"22", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, fontSize: 13, color: C.yellow }}>
                 ⏱ Downtime starts now: {new Date().toLocaleString("en-GB")}
               </div>
@@ -768,6 +769,9 @@ export default function AssetPage() {
                       </div>
                       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{b.reported_by} · {fmtDateTime(b.reported_at)}</div>
                       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 10 }}>{b.description}</div>
+                      {b.target_date && b.status !== "Resolved" && (
+                        <div style={{ fontSize: 12, color: b.target_date < TODAY ? C.red : C.muted, marginBottom: 10 }}>🎯 {t(lang,"targetResolutionDate")}: {b.target_date}</div>
+                      )}
                       <UpdatesLog updates={b.updates} />
                       {b.status !== "Resolved" && (
                         <Btn small secondary onClick={() => { setUpdateTarget({ item: b, table: "breakdown_reports" }); setUpdateNote(""); setView("add-update"); }}>📝 {t(lang,"addUpdate")}</Btn>

@@ -268,7 +268,7 @@ function IssueReportModal({ asset, userRole, onClose, onReported, onWorkOrderCre
 }
 // ─── BREAKDOWN REPORT MODAL ───────────────────────────────────────────────────
 function BreakdownReportModal({ asset, userRole, onClose, onReported, onWorkOrderCreated, lang }) {
-  const [form, setForm] = useState({ description: "", severity: "High", reported_by: userRole.name || "" });
+  const [form, setForm] = useState({ description: "", severity: "High", reported_by: userRole.name || "", target_date: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
@@ -279,11 +279,11 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, onWorkOrde
     setSaving(true); setError(null);
     const now = new Date().toISOString();
     const woId = uid("WO");
-    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: form.reported_by, reported_at: now, downtime_start: now, description: form.description, severity: form.severity, status: "Open", work_order_id: woId };
+    const record = { id: uid("BRK"), asset_id: asset.id, asset_name: asset.name, site: asset.location, reported_by: form.reported_by, reported_at: now, downtime_start: now, description: form.description, severity: form.severity, status: "Open", work_order_id: woId, target_date: form.target_date||null };
     const { error: err } = await supabase.from("breakdown_reports").insert([record]);
     if (err) { setError(err.message); setSaving(false); return; }
     await supabase.from("assets").update({ status: "Under Maintenance" }).eq("id", asset.id);
-    const newWO = { id: woId, title: `Breakdown — ${asset.name}: ${form.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: form.severity==="Critical"?"Critical":form.severity==="High"?"High":"Medium", status: "Open", assignee: null, start_date: now.split("T")[0], due: null, vendor: null, site: asset.location, breakdown_id: record.id };
+    const newWO = { id: woId, title: `Breakdown — ${asset.name}: ${form.description.slice(0,50)}`, asset: asset.name, asset_id: asset.id, category: asset.category||null, priority: form.severity==="Critical"?"Critical":form.severity==="High"?"High":"Medium", status: "Open", assignee: null, start_date: now.split("T")[0], due: form.target_date||null, vendor: null, site: asset.location, breakdown_id: record.id };
     const { error: woErr } = await supabase.from("work_orders").insert([newWO]);
     if (woErr) { setError(`Breakdown saved, but its work order failed to create: ${woErr.message}`); setSaving(false); return; }
     if (onWorkOrderCreated) onWorkOrderCreated(newWO);
@@ -305,6 +305,7 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, onWorkOrde
             <Input label={t(lang,"yourName")} value={form.reported_by} onChange={f("reported_by")} />
             <Sel label={t(lang,"severity")} value={form.severity} onChange={f("severity")} options={["Critical","High","Medium","Low"]} />
             <Textarea label={t(lang,"describeIssue")} value={form.description} onChange={f("description")} />
+            <Input label={t(lang,"targetResolutionDate")} value={form.target_date} onChange={f("target_date")} type="date" />
             <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, fontSize: 12, color: C.yellow }}>
               {t(lang,"downtimeStartsNow")}: <strong>{new Date().toLocaleString("en-GB")}</strong>
             </div>
@@ -779,6 +780,9 @@ const onIssueReported = (record) => {
                     <div style={{ fontSize: 12, color: C.muted }}>{b.site} · {t(lang,"reportedBy")} {b.reported_by} · {fmtDateTime(b.reported_at)}</div>
                     {isAcknowledged && b.acknowledged_by && (
                       <div style={{ fontSize: 12, color: C.blue, marginTop: 4 }}>👁 {t(lang,"acknowledged")}: {b.acknowledged_by} · {fmtDateTime(b.acknowledged_at)}</div>
+                    )}
+                    {b.target_date && !isResolved && (
+                      <div style={{ fontSize: 12, color: b.target_date < TODAY ? C.red : C.muted, marginTop: 4 }}>🎯 {t(lang,"targetResolutionDate")}: {fmtDate(b.target_date)}</div>
                     )}
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
