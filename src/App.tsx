@@ -2830,11 +2830,14 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
   const [error, setError] = useState(null);
   const [assetSearch, setAssetSearch] = useState("");
   const [assetSiteFilter, setAssetSiteFilter] = useState("All");
+  const [assetCatFilter, setAssetCatFilter] = useState("All");
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const [pendingFile, setPendingFile] = useState(null);
   const [editingCoverage, setEditingCoverage] = useState(null);
   const [coverageSelected, setCoverageSelected] = useState([]);
   const [coverageSearch, setCoverageSearch] = useState("");
+  const [coverageSiteFilter, setCoverageSiteFilter] = useState("All");
+  const [coverageCatFilter, setCoverageCatFilter] = useState("All");
   const [form, setForm] = useState({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -2879,7 +2882,7 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
     setPolicies(prev => [...prev, record]);
     setLinks(prev => [...prev, ...linkRecords]);
     setForm({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
-    setSelectedAssetIds([]); setPendingFile(null); setAssetSearch(""); setAssetSiteFilter("All");
+    setSelectedAssetIds([]); setPendingFile(null); setAssetSearch(""); setAssetSiteFilter("All"); setAssetCatFilter("All");
     setShowForm(false);
     setSaving(false);
   };
@@ -2894,7 +2897,7 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
   const openCoverageEditor = (policy) => {
     setEditingCoverage(policy.id);
     setCoverageSelected(coveredAssetsFor(policy.id).map(l => l.asset_id));
-    setCoverageSearch("");
+    setCoverageSearch(""); setCoverageSiteFilter("All"); setCoverageCatFilter("All");
   };
 
   const saveCoverage = async (policyId) => {
@@ -2913,7 +2916,7 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
     setSaving(false);
   };
 
-  const AssetPicker = ({ selected, onToggle, search, onSearch, siteFilter, onSiteFilter }) => (
+  const AssetPicker = ({ selected, onToggle, search, onSearch, siteFilter, onSiteFilter, catFilter, onCatFilter }) => (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <input value={search} onChange={e => onSearch(e.target.value)} placeholder={t(lang,"searchAssets")}
@@ -2924,10 +2927,16 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
             {sites.filter(s => s !== "— Select Site —").map(s => <option key={s}>{s}</option>)}
           </select>
         )}
+        {onCatFilter && (
+          <select value={catFilter} onChange={e => onCatFilter(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+            <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
+            {WO_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+        )}
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{selected.length} {t(lang,"selected")}</div>
       <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-        {assets.filter(a => (!search || a.name.toLowerCase().includes(search.toLowerCase())) && (!siteFilter || siteFilter==="All" || a.location===siteFilter)).map(a => (
+        {assets.filter(a => (!search || a.name.toLowerCase().includes(search.toLowerCase())) && (!siteFilter || siteFilter==="All" || a.location===siteFilter) && (!catFilter || catFilter==="All" || a.category===catFilter)).map(a => (
           <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.subtle, cursor: "pointer", padding: "4px 6px" }}>
             <input type="checkbox" checked={selected.includes(a.id)} onChange={() => onToggle(a.id)} />
             {a.name} <span style={{ color: C.muted }}>({a.location})</span>
@@ -2963,7 +2972,7 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
           </div>
           <div style={{ marginTop: 16 }}>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"coveredAssets")}</div>
-            <AssetPicker selected={selectedAssetIds} onToggle={toggleAsset} search={assetSearch} onSearch={setAssetSearch} siteFilter={assetSiteFilter} onSiteFilter={setAssetSiteFilter} />
+            <AssetPicker selected={selectedAssetIds} onToggle={toggleAsset} search={assetSearch} onSearch={setAssetSearch} siteFilter={assetSiteFilter} onSiteFilter={setAssetSiteFilter} catFilter={assetCatFilter} onCatFilter={setAssetCatFilter} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <Btn onClick={submit} disabled={saving||uploading}>{saving||uploading?t(lang,"saving"):t(lang,"create")}</Btn>
@@ -2996,7 +3005,7 @@ function InsuranceManagement({ assets, isAdmin, lang, sites }) {
                 </div>
                 {editingCoverage===p.id ? (
                   <div>
-                    <AssetPicker selected={coverageSelected} onToggle={toggleCoverageAsset} search={coverageSearch} onSearch={setCoverageSearch} siteFilter={null} onSiteFilter={null} />
+                    <AssetPicker selected={coverageSelected} onToggle={toggleCoverageAsset} search={coverageSearch} onSearch={setCoverageSearch} siteFilter={coverageSiteFilter} onSiteFilter={setCoverageSiteFilter} catFilter={coverageCatFilter} onCatFilter={setCoverageCatFilter} />
                     <div style={{ marginTop: 10 }}>
                       <Btn small onClick={() => saveCoverage(p.id)} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
                     </div>
