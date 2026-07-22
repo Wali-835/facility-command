@@ -2687,8 +2687,213 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
     </div>
   );
 }
+function AssetDocumentsModal({ asset, onClose, lang, userRole, isAdmin }) {
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [docType, setDocType] = useState("Manual");
+  const [notes, setNotes] = useState("");
+  const DOC_TYPES = ["Manual","IQ","OQ","Certificate","Other"];
+
+  useEffect(() => { loadDocs(); }, [asset.id]);
+
+  const loadDocs = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("asset_documents").select("*").eq("asset_id", asset.id).order("uploaded_at", { ascending: false });
+    setDocs(data || []);
+    setLoading(false);
+  };
+
+  const uploadDoc = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 15 * 1024 * 1024) { setError(t(lang,"maxFileSize")); return; }
+    setUploading(true); setError(null);
+    const path = `${asset.id}/${Date.now()}-${file.name}`;
+    const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
+    if (upErr) { setError(upErr.message); setUploading(false); return; }
+    const record = { id: uid("DOC"), asset_id: asset.id, asset_name: asset.name, document_type: docType, file_name: file.name, file_path: path, notes: notes||null, uploaded_by: userRole?.name||"—" };
+    const { error: err } = await supabase.from("asset_documents").insert([record]);
+    if (err) { setError(err.message); } else { setDocs(prev => [record, ...prev]); setNotes(""); }
+    setUploading(false);
+  };
+
+  const deleteDoc = async (doc) => {
+    await supabase.storage.from("asset-documents").remove([doc.file_path]);
+    await supabase.from("asset_documents").delete().eq("id", doc.id);
+    setDocs(prev => prev.filter(d => d.id !== doc.id));
+  };
+
+  const docUrl = (doc) => supabase.storage.from("asset-documents").getPublicUrl(doc.file_path).data.publicUrl;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 680, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div><div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>📄 {t(lang,"documents")} — {asset.name}</div></div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 10 }}>
+              <Sel label={t(lang,"documentType")} value={docType} onChange={setDocType} options={DOC_TYPES} />
+              <Input label={t(lang,"notes")} value={notes} onChange={setNotes} />
+            </div>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accent, color: "#fff", borderRadius: 6, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: uploading?"not-allowed":"pointer", opacity: uploading?0.7:1 }}>
+              {uploading ? "⏳..." : `📄 ${t(lang,"upload")}`}
+              <input type="file" onChange={uploadDoc} style={{ display: "none" }} disabled={uploading} />
+            </label>
+          </div>
+          {loading ? <Spinner lang={lang} /> : docs.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 32, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>{t(lang,"noDocumentsYet")}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {docs.map(doc => (
+                <div key={doc.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{doc.file_name}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{doc.document_type} · {doc.uploaded_by} · {fmtDateTime(doc.uploaded_at)}{doc.notes?` · ${doc.notes}`:""}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn small onClick={() => window.open(docUrl(doc), "_blank")}>{t(lang,"view")}</Btn>
+                    {isAdmin && <Btn small variant="danger" onClick={() => deleteDoc(doc)}>{t(lang,"del")}</Btn>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InsurancePoliciesModal({ asset, onClose, lang, isAdmin }) {
+  const [policies, setPolicies] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [form, setForm] = useState({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  useEffect(() => { loadPolicies(); }, [asset.id]);
+
+  const loadPolicies = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("insurance_policies").select("*").eq("asset_id", asset.id).order("expiry_date", { ascending: true });
+    setPolicies(data || []);
+    setLoading(false);
+  };
+
+  const submit = async () => {
+    if (!form.provider) { setError(t(lang,"provider")); return; }
+    setSaving(true); setError(null);
+    const record = { id: uid("INS"), asset_id: asset.id, asset_name: asset.name, provider: form.provider, policy_number: form.policy_number||null, coverage_type: form.coverage_type||null, start_date: form.start_date||null, expiry_date: form.expiry_date||null, premium: form.premium?parseFloat(form.premium):null, notes: form.notes||null };
+    const { error: err } = await supabase.from("insurance_policies").insert([record]);
+    if (err) { setError(err.message); } else {
+      setPolicies(prev => [...prev, record].sort((a,b) => (a.expiry_date||"").localeCompare(b.expiry_date||"")));
+      setForm({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
+      setShowForm(false);
+    }
+    setSaving(false);
+  };
+
+  const deletePolicy = async (id) => { await supabase.from("insurance_policies").delete().eq("id", id); setPolicies(prev => prev.filter(p => p.id !== id)); };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 680, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div><div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>🛡️ {t(lang,"insurance")} — {asset.name}</div></div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ marginBottom: 16 }}>
+            <Btn small onClick={() => setShowForm(v => !v)}>{t(lang,"addPolicy")}</Btn>
+          </div>
+          {showForm && (
+            <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                <Input label={t(lang,"provider")} value={form.provider} onChange={f("provider")} />
+                <Input label={t(lang,"policyNumber")} value={form.policy_number} onChange={f("policy_number")} />
+                <Input label={t(lang,"coverageType")} value={form.coverage_type} onChange={f("coverage_type")} />
+                <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
+                <Input label={t(lang,"expiryDate")} value={form.expiry_date} onChange={f("expiry_date")} type="date" />
+                <Input label={t(lang,"premium")} value={form.premium} onChange={f("premium")} type="number" />
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <Textarea label={t(lang,"notes")} value={form.notes} onChange={f("notes")} />
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <Btn small onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
+                <Btn small variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+              </div>
+            </div>
+          )}
+          {loading ? <Spinner lang={lang} /> : policies.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 32, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>{t(lang,"noPoliciesYet")}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {policies.map(p => (
+                <div key={p.id} style={{ background: C.surface, border: `1px solid ${p.expiry_date && p.expiry_date < TODAY ? C.red+"44" : C.border}`, borderRadius: 8, padding: "12px 14px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{p.provider} {p.policy_number?`(${p.policy_number})`:""}</div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{p.coverage_type||"—"} · {p.start_date?fmtDate(p.start_date):"—"} → {p.expiry_date?fmtDate(p.expiry_date):"—"}{p.premium?` · $${p.premium}`:""}</div>
+                      {p.notes && <div style={{ fontSize: 12, color: C.subtle, marginTop: 4 }}>{p.notes}</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {p.expiry_date && p.expiry_date < TODAY && <Badge label={t(lang,"expired")} color={C.red} />}
+                      {isAdmin && <Btn small variant="danger" onClick={() => deletePolicy(p.id)}>{t(lang,"del")}</Btn>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const CustomFieldsEditor = ({ value, onChange, lang }) => {
+  const fields = value && typeof value === "object" ? value : {};
+  const rows = Object.entries(fields);
+  const updateRow = (i, k, v) => {
+    const next = Object.fromEntries(rows);
+    const keys = Object.keys(next);
+    const oldKey = keys[i];
+    if (k !== undefined && k !== oldKey) { delete next[oldKey]; next[k] = v !== undefined ? v : fields[oldKey]; }
+    else if (v !== undefined) { next[oldKey] = v; }
+    onChange(next);
+  };
+  const removeRow = (i) => { const next = Object.fromEntries(rows); delete next[Object.keys(next)[i]]; onChange(next); };
+  const addRow = () => onChange({ ...fields, "": "" });
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"customFields")}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rows.map(([k,v],i) => (
+          <div key={i} style={{ display: "flex", gap: 8 }}>
+            <input value={k} onChange={e => updateRow(i, e.target.value, undefined)} placeholder={t(lang,"fieldName")}
+              style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 13 }} />
+            <input value={v} onChange={e => updateRow(i, undefined, e.target.value)} placeholder={t(lang,"fieldValue")}
+              style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 13 }} />
+            <button onClick={() => removeRow(i)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.red, cursor: "pointer", padding: "0 10px" }}>✕</button>
+          </div>
+        ))}
+        <button onClick={addRow} style={{ background: "none", border: `1px dashed ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.accent, cursor: "pointer", fontSize: 12, alignSelf: "flex-start" }}>+ {t(lang,"addField")}</button>
+      </div>
+    </div>
+  );
+};
+
 function AssetEditModal({ data, onSave, onClose, lang, mheModels, sites, error }) {
-  const [form, setForm] = useState({ ...data });
+  const [form, setForm] = useState({ ...data, custom_fields: data.custom_fields || {} });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const brands = [...new Set(mheModels.map(m => m.brand).filter(Boolean))];
   const modelsForBrand = form.brand ? mheModels.filter(m => m.brand === form.brand) : mheModels;
@@ -2749,6 +2954,9 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels, sites, error }
         <div style={{ marginTop: 12 }}>
           <Textarea label={t(lang,"technicalSpecs")} value={form.technical_specs||""} onChange={f("technical_specs")} placeholder="Engine specs, capacity, dimensions..." />
         </div>
+        <div style={{ marginTop: 16 }}>
+          <CustomFieldsEditor value={form.custom_fields} onChange={f("custom_fields")} lang={lang} />
+        </div>
         <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
           <Btn onClick={() => onSave(form)}>{t(lang,"save")}</Btn>
           <Btn variant="secondary" onClick={onClose}>{t(lang,"cancel")}</Btn>
@@ -2761,6 +2969,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
   const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
+  const [docsAsset, setDocsAsset] = useState(null); const [insuranceAsset, setInsuranceAsset] = useState(null);
   const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
   useEffect(() => {
@@ -2814,10 +3023,36 @@ const filtered = assets.filter(a =>
   };
 
   const updateStatus = async (id,val) => { await supabase.from("assets").update({ status: val }).eq("id",id); setAssets(prev => prev.map(a => a.id===id?{...a,status:val}:a)); };
+  const generateTransferForm = (asset, oldLocation, newLocation) => {
+    applyPlugin(jsPDF);
+    const doc = new jsPDF();
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(15); doc.setFont("helvetica","bold"); doc.text("ASSET TRANSFER / SECURITY EXIT PERMIT",14,13); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("EPx Logistics — Facility Command",14,21);
+    doc.setTextColor(0,0,0);
+    doc.autoTable({ startY: 40, head: [[t(lang,"field"),t(lang,"details")]], body: [
+      [t(lang,"assetName"), asset.name],
+      ["Asset ID", asset.id],
+      [t(lang,"category"), asset.category||"—"],
+      [t(lang,"serialNumber"), asset.serial_number||"—"],
+      [t(lang,"fromSite"), oldLocation||"—"],
+      [t(lang,"toSite"), newLocation||"—"],
+      [t(lang,"date"), new Date().toLocaleString("en-GB")],
+      [t(lang,"authorizedBy"), userRole?.name||"—"],
+    ], headStyles: { fillColor: [249,115,22], textColor: 255 }, margin: { left: 14, right: 14 } });
+    let y = doc.lastAutoTable.finalY + 24;
+    doc.setFontSize(11);
+    doc.text(`${t(lang,"securityGateSignature")}: _____________________________`, 14, y); y += 20;
+    doc.text(`${t(lang,"date")}: _____________________`, 14, y);
+    doc.save(`Transfer_${asset.id}_${TODAY}.pdf`);
+  };
+
   const saveEdit = async (updated) => {
     if (updated.serial_number && assets.some(a => a.id !== updated.id && a.serial_number === updated.serial_number)) { setError(t(lang,"duplicateSerialNumber")); return; }
     const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id);
-    if (!err) { setAssets(prev => prev.map(a => a.id===updated.id?updated:a)); setEditItem(null); setError(null); } else setError(assetDbErrorMessage(err, lang));
+    if (!err) {
+      setAssets(prev => prev.map(a => a.id===updated.id?updated:a));
+      if (editItem && editItem.location !== updated.location) generateTransferForm(updated, editItem.location, updated.location);
+      setEditItem(null); setError(null);
+    } else setError(assetDbErrorMessage(err, lang));
   };
   const confirmDelete = async () => { await supabase.from("assets").delete().eq("id",deleteItem.id); setAssets(prev => prev.filter(a => a.id!==deleteItem.id)); setDeleteItem(null); };
 
@@ -2826,6 +3061,8 @@ const filtered = assets.filter(a =>
       {editItem && <AssetEditModal lang={lang} data={editItem} mheModels={mheModels} sites={sites} error={error} onSave={saveEdit} onClose={() => { setEditItem(null); setError(null); }} />}
       {deleteItem && <ConfirmDel lang={lang} name={deleteItem.name} onConfirm={confirmDelete} onClose={() => setDeleteItem(null)} />}
       {selectedAsset && <MaintenanceModal asset={selectedAsset} lang={lang} onClose={() => setSelectedAsset(null)} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} userRole={userRole} />}
+      {docsAsset && <AssetDocumentsModal asset={docsAsset} lang={lang} userRole={userRole} isAdmin={isAdmin} onClose={() => setDocsAsset(null)} />}
+      {insuranceAsset && <InsurancePoliciesModal asset={insuranceAsset} lang={lang} isAdmin={isAdmin} onClose={() => setInsuranceAsset(null)} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 18 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t(lang,"searchAssets")} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 12px", color: C.text, fontSize: 13, flex: "1 1 180px" }} />
@@ -2908,9 +3145,18 @@ const filtered = assets.filter(a =>
                     <span style={{ color: C.subtle, fontWeight: 600 }}>{t(lang,"technicalSpecs")}: </span>{a.technical_specs}
                   </div>
                 )}
+                {a.custom_fields && Object.keys(a.custom_fields).length > 0 && (
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, padding: "8px 10px", background: C.surface, borderRadius: 6, lineHeight: 1.6 }}>
+                    {Object.entries(a.custom_fields).filter(([k]) => k).map(([k,v]) => (
+                      <div key={k}><span style={{ color: C.subtle, fontWeight: 600 }}>{k}: </span>{v}</div>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"logChecklist")}</button>
                   <button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"qrCode")}</button>
+                  {isMaintenance && <button onClick={() => setDocsAsset(a)} style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"documents")}</button>}
+                  {isSupervisor && <button onClick={() => setInsuranceAsset(a)} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🛡️ {t(lang,"insurance")}</button>}
                   {isAdmin && <><Btn small onClick={() => setEditItem(a)} color={C.accent}>{t(lang,"edit")}</Btn><Btn small variant="danger" onClick={() => setDeleteItem(a)}>{t(lang,"del")}</Btn></>}
                 </div>
               </div>
@@ -3434,6 +3680,30 @@ function LowStockAlerts({ lang, isSupervisor }) {
     </div>
   );
 }
+function InsuranceExpiryAlerts({ lang, isSupervisor }) {
+  const [expiring, setExpiring] = useState([]);
+  useEffect(() => {
+    const soon = new Date(); soon.setDate(soon.getDate()+30);
+    const soonStr = soon.toISOString().split("T")[0];
+    supabase.from("insurance_policies").select("*").not("expiry_date","is",null).lte("expiry_date",soonStr).order("expiry_date")
+      .then(({ data }) => setExpiring(data||[]));
+  }, []);
+  if (!expiring.length || !isSupervisor) return null;
+  return (
+    <div style={{ background: C.red+"11", border: `1px solid ${C.red}44`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 10 }}>🛡️ {t(lang,"insuranceExpiringAlerts")} ({expiring.length})</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {expiring.slice(0,5).map(p => (
+          <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.subtle }}>
+            <span><strong style={{ color: C.text }}>{p.asset_name}</strong> — {p.provider||"—"} {p.policy_number?`(${p.policy_number})`:""}</span>
+            <span style={{ color: p.expiry_date<TODAY?C.red:C.yellow, fontWeight: 700 }}>{p.expiry_date<TODAY?t(lang,"expired"):t(lang,"expiresOn")} {fmtDate(p.expiry_date)}</span>
+          </div>
+        ))}
+        {expiring.length > 5 && <div style={{ fontSize: 11, color: C.muted }}>+{expiring.length-5} more</div>}
+      </div>
+    </div>
+  );
+}
 function Overview({ workOrders, assets, vendors, lang, isSupervisor }) {
   const open=workOrders.filter(w => w.status!=="Completed").length;
   const critical=workOrders.filter(w => w.priority==="Critical").length;
@@ -3446,13 +3716,14 @@ function Overview({ workOrders, assets, vendors, lang, isSupervisor }) {
     <div>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
         <StatCard icon="🔧" label={t(lang,"openWorkOrders")} value={open} sub={`${critical} ${t(lang,"critical")}`} color={C.accent} />
-        <StatCard icon="🏭" label={t(lang,"operationalAssets")} value={`${opAssets}/${assets.length}`} sub={t(lang,"fleetStatus")} color={C.green} />
+        <StatCard icon="🏭" label={t(lang,"operationalAssets")} value={`${opAssets}/${assets.length}`} sub={t(lang,"assetStatus")} color={C.green} />
         <StatCard icon="🚨" label={t(lang,"assetsDown")} value={downAssets} sub={t(lang,"underMaintenance")} color={C.red} />
         <StatCard icon="⚠️" label={t(lang,"overdueAtRisk")} value={overdue} sub={t(lang,"pastDueDate")} color={C.yellow} />
         <StatCard icon="📋" label={t(lang,"pmDueMonth")} value={pmDue} sub={t(lang,"preventiveMaintenance")} color={C.blue} />
         <StatCard icon="🤝" label={t(lang,"activeVendors")} value={activeVendors} sub={t(lang,"contractorsOnFile")} color={C.purple} />
       </div>
       <LowStockAlerts lang={lang} isSupervisor={isSupervisor} />
+      <InsuranceExpiryAlerts lang={lang} isSupervisor={isSupervisor} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
           <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>{t(lang,"recentWorkOrders")}</div>
@@ -3472,6 +3743,22 @@ function Overview({ workOrders, assets, vendors, lang, isSupervisor }) {
             const down=assets.filter(a => a.location===site&&a.status==="Under Maintenance").length;
             return <div key={site} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <span style={{ fontSize: 13, color: C.subtle }}>{site}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <span style={{ fontSize: 11, color: C.green }}>{op} ok</span>
+                {down>0 && <span style={{ fontSize: 11, color: C.red }}>{down} {t(lang,"assetsDown")}</span>}
+                <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{count}</span>
+              </div>
+            </div>;
+          })}
+        </div>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+          <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>{t(lang,"assetsByCategory")}</div>
+          {[...new Set(assets.map(a => a.category).filter(Boolean))].sort().map(cat => {
+            const count=assets.filter(a => a.category===cat).length; if (!count) return null;
+            const op=assets.filter(a => a.category===cat&&a.status==="Operational").length;
+            const down=assets.filter(a => a.category===cat&&a.status==="Under Maintenance").length;
+            return <div key={cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 13, color: C.subtle }}>{CATEGORY_ICONS[cat]||"🔧"} {cat}</span>
               <div style={{ display: "flex", gap: 8 }}>
                 <span style={{ fontSize: 11, color: C.green }}>{op} ok</span>
                 {down>0 && <span style={{ fontSize: 11, color: C.red }}>{down} {t(lang,"assetsDown")}</span>}
