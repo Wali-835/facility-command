@@ -705,7 +705,9 @@ export default function AssetPage() {
               </div>
               <Sel label="Severity" value={brkForm.severity} onChange={bf("severity")} options={["Critical","High","Medium","Low"]} />
               <Textarea label="Describe the issue *" value={brkForm.description} onChange={bf("description")} placeholder="What happened? Any error messages?" />
-              <Input label={t(lang,"targetResolutionDate")} value={brkForm.target_date} onChange={bf("target_date")} type="date" />
+              {(userRole?.role==="supervisor"||userRole?.role==="engineer"||userRole?.role==="admin") && (
+                <Input label={t(lang,"targetResolutionDate")} value={brkForm.target_date} onChange={bf("target_date")} type="date" />
+              )}
               <div style={{ background: C.yellow+"22", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, fontSize: 13, color: C.yellow }}>
                 ⏱ Downtime starts now: {new Date().toLocaleString("en-GB")}
               </div>

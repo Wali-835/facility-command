@@ -305,7 +305,9 @@ function BreakdownReportModal({ asset, userRole, onClose, onReported, onWorkOrde
             <Input label={t(lang,"yourName")} value={form.reported_by} onChange={f("reported_by")} />
             <Sel label={t(lang,"severity")} value={form.severity} onChange={f("severity")} options={["Critical","High","Medium","Low"]} />
             <Textarea label={t(lang,"describeIssue")} value={form.description} onChange={f("description")} />
-            <Input label={t(lang,"targetResolutionDate")} value={form.target_date} onChange={f("target_date")} type="date" />
+            {(userRole?.role==="supervisor"||userRole?.role==="engineer"||userRole?.role==="admin") && (
+              <Input label={t(lang,"targetResolutionDate")} value={form.target_date} onChange={f("target_date")} type="date" />
+            )}
             <div style={{ background: C.yellow+"11", border: `1px solid ${C.yellow}44`, borderRadius: 8, padding: 12, fontSize: 12, color: C.yellow }}>
               {t(lang,"downtimeStartsNow")}: <strong>{new Date().toLocaleString("en-GB")}</strong>
             </div>
@@ -554,7 +556,7 @@ function IssueOperatorConfirm({ issue, userRole, lang, onConfirmed }) {
 }
 
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
-function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent, isMaintenance, isSupervisor }) {
+function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent, isMaintenance, isSupervisor, isEngineer }) {
   const [breakdowns, setBreakdowns] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -568,8 +570,22 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [selectedIssueAsset, setSelectedIssueAsset] = useState(null);
   const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
+  const [editingTargetDate, setEditingTargetDate] = useState(null); // breakdown id
+  const [targetDateInput, setTargetDateInput] = useState("");
+  const canSetTargetDate = isSupervisor || isEngineer;
 
   useEffect(() => { loadAll(); }, []);
+
+  const saveBreakdownTargetDate = async (b) => {
+    const { error: err } = await supabase.from("breakdown_reports").update({ target_date: targetDateInput||null }).eq("id", b.id);
+    if (err) { setError(err.message); return; }
+    setBreakdowns(prev => prev.map(x => x.id===b.id ? { ...x, target_date: targetDateInput||null } : x));
+    if (b.work_order_id) {
+      await supabase.from("work_orders").update({ due: targetDateInput||null }).eq("id", b.work_order_id);
+      setWorkOrders(prev => prev.map(w => w.id===b.work_order_id ? { ...w, due: targetDateInput||null } : w));
+    }
+    setEditingTargetDate(null);
+  };
 
   // An asset can have at most one open (non-Resolved) breakdown or issue at a time.
   const openReportFor = (assetId) => {
@@ -781,8 +797,21 @@ const onIssueReported = (record) => {
                     {isAcknowledged && b.acknowledged_by && (
                       <div style={{ fontSize: 12, color: C.blue, marginTop: 4 }}>👁 {t(lang,"acknowledged")}: {b.acknowledged_by} · {fmtDateTime(b.acknowledged_at)}</div>
                     )}
-                    {b.target_date && !isResolved && (
-                      <div style={{ fontSize: 12, color: b.target_date < TODAY ? C.red : C.muted, marginTop: 4 }}>🎯 {t(lang,"targetResolutionDate")}: {fmtDate(b.target_date)}</div>
+                    {!isResolved && (
+                      editingTargetDate===b.id ? (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                          <input type="date" value={targetDateInput} onChange={e => setTargetDateInput(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px", color: C.text, fontSize: 12 }} />
+                          <Btn small onClick={() => saveBreakdownTargetDate(b)}>{t(lang,"save")}</Btn>
+                          <Btn small variant="secondary" onClick={() => setEditingTargetDate(null)}>{t(lang,"cancel")}</Btn>
+                        </div>
+                      ) : (b.target_date ? (
+                        <div style={{ fontSize: 12, color: b.target_date < TODAY ? C.red : C.muted, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                          🎯 {t(lang,"targetResolutionDate")}: {fmtDate(b.target_date)}
+                          {canSetTargetDate && <button onClick={() => { setEditingTargetDate(b.id); setTargetDateInput(b.target_date||""); }} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11 }}>✏️</button>}
+                        </div>
+                      ) : canSetTargetDate && (
+                        <button onClick={() => { setEditingTargetDate(b.id); setTargetDateInput(""); }} style={{ background: "none", border: `1px dashed ${C.border}`, borderRadius: 4, padding: "3px 8px", color: C.muted, cursor: "pointer", fontSize: 11, marginTop: 6 }}>+ {t(lang,"targetResolutionDate")}</button>
+                      ))
                     )}
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -4565,7 +4594,7 @@ export default function App() {
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} />}
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
-        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} />}
+        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
         {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
