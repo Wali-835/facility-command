@@ -23,7 +23,7 @@ select cron.schedule(
     url := 'https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/check-insurance-expiry',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer YOUR_ANON_KEY_HERE'
+      'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2d3NkenFndnJ3Ymp1c2ptcmRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxOTc1OTcsImV4cCI6MjA5Mzc3MzU5N30.Cw2m6A6tUFy-oS0Eg3xkeNCIUWNRM19n_jdCWrTJiDo'
     ),
     body := '{}'::jsonb
   );
