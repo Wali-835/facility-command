@@ -120,6 +120,11 @@ export const translations = {
     reject: "Reject",
     finalApprove: "Final Approve",
     supervisorApproved: "Supervisor Approved",
+    useStock: "Use Stock",
+    orderPart: "Order Part",
+    fulfilledFromStock: "From Stock",
+    toBeOrdered: "To Be Ordered",
+    insufficientStock: "Not enough stock on hand for this quantity — use \"Order Part\" instead.",
     rejectionReasonPlaceholder: "Reason for rejecting this part request...",
 
     // Notifications
@@ -572,6 +577,11 @@ breakdownsAndIssues: "Breakdowns & Issues",
     reject: "رفض",
     finalApprove: "الموافقة النهائية",
     supervisorApproved: "وافق عليه المشرف",
+    useStock: "استخدام من المخزون",
+    orderPart: "طلب القطعة",
+    fulfilledFromStock: "من المخزون",
+    toBeOrdered: "سيتم طلبها",
+    insufficientStock: "لا يوجد مخزون كافٍ لهذه الكمية — استخدم \"طلب القطعة\" بدلاً من ذلك.",
     rejectionReasonPlaceholder: "سبب رفض طلب هذه القطعة...",
 
     // Notifications

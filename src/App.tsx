@@ -1315,16 +1315,20 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
     const rawPartId = partForm.asset_part_id;
     const isModelLevel = rawPartId && String(rawPartId).startsWith("mdl-");
     const cleanPartId = isModelLevel ? null : rawPartId || null;
-    const initialStatus = isEngineer ? "Approved" : isSupervisor ? "Supervisor Approved" : "Pending";
     const now = new Date().toISOString();
+    let approvalStatus = "Pending", approvedBy = null, approvedAt = null, fulfillmentType = null;
+    if (isEngineer) {
+      let stockAvailable = null;
+      if (cleanPartId) { const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanPartId).single(); stockAvailable = ap ? (ap.stock_quantity||0) : null; }
+      fulfillmentType = stockAvailable !== null && stockAvailable >= qty ? "Stock" : "Order";
+      approvalStatus = "Approved"; approvedBy = userRole?.name; approvedAt = now;
+    }
     const record = { id: uid("PRT"), log_id: logId, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanPartId,
-      approval_status: initialStatus,
-      supervisor_approved_by: initialStatus!=="Pending" ? userRole?.name : null, supervisor_approved_at: initialStatus!=="Pending" ? now : null,
-      approved_by: initialStatus==="Approved" ? userRole?.name : null, approved_at: initialStatus==="Approved" ? now : null };
+      approval_status: approvalStatus, approved_by: approvedBy, approved_at: approvedAt, fulfillment_type: fulfillmentType };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
       setSuccess("✓"); setParts(prev => ({ ...prev, [logId]: [...(prev[logId]||[]),record] })); setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null }); setShowPartForm(null);
-      if (initialStatus==="Approved" && cleanPartId) {
+      if (fulfillmentType==="Stock" && cleanPartId) {
         const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanPartId).single();
         if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", cleanPartId);
       }
@@ -1332,25 +1336,19 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
     setSaving(false);
   };
 
-  const approvePartSupervisor = async (part, logId) => {
+  const approvePart = async (part, logId, finalUnitCost, fulfillment) => {
     setSaving(true); setError(null);
-    const now = new Date().toISOString();
-    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now, rejection_reason: null }).eq("id", part.id);
-    if (err) { setError(err.message); } else {
-      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now } : p) }));
+    if (fulfillment === "Stock") {
+      const stockAvailable = part.asset_part_id ? (await supabase.from("asset_parts").select("stock_quantity").eq("id", part.asset_part_id).single()).data?.stock_quantity ?? null : null;
+      if (stockAvailable === null || stockAvailable < part.quantity) { setError(t(lang,"insufficientStock")); setSaving(false); return; }
     }
-    setSaving(false);
-  };
-
-  const approvePartEngineer = async (part, logId, finalUnitCost) => {
-    setSaving(true); setError(null);
     const now = new Date().toISOString();
     const unitCost = parseFloat(finalUnitCost)||0;
     const totalCost = unitCost * part.quantity;
-    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, rejection_reason: null }).eq("id", part.id);
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, fulfillment_type: fulfillment, rejection_reason: null }).eq("id", part.id);
     if (err) { setError(err.message); } else {
-      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost } : p) }));
-      if (part.asset_part_id) {
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, fulfillment_type: fulfillment } : p) }));
+      if (fulfillment === "Stock" && part.asset_part_id) {
         const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", part.asset_part_id).single();
         if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-part.quantity) }).eq("id", part.asset_part_id);
       }
@@ -1474,25 +1472,16 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                                       <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost?`$${part.total_cost}`:"—"}</td>
                                       <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
                                       <td style={{ padding: "8px 10px" }}>
-                                        <Badge label={part.approval_status==="Approved"?t(lang,"approved"):part.approval_status==="Rejected"?t(lang,"rejected"):part.approval_status==="Supervisor Approved"?t(lang,"supervisorApproved"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:part.approval_status==="Supervisor Approved"?C.blue:C.yellow} />
-                                        {isSupervisor && !isEngineer && part.approval_status==="Pending" && (
-                                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                            <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.green}>✓ {t(lang,"approve")}</Btn>
-                                            <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
-                                          </div>
-                                        )}
+                                        <Badge label={part.approval_status==="Approved"?`${t(lang,"approved")}${part.fulfillment_type?` · ${part.fulfillment_type==="Stock"?t(lang,"fulfilledFromStock"):t(lang,"toBeOrdered")}`:""}`:part.approval_status==="Rejected"?t(lang,"rejected"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:C.yellow} />
                                         {isEngineer && part.approval_status==="Pending" && (
-                                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                            <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.blue}>✓ {t(lang,"approve")} ({t(lang,"supervisorRole")})</Btn>
-                                            <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
-                                          </div>
-                                        )}
-                                        {isEngineer && part.approval_status==="Supervisor Approved" && (
-                                          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 140 }}>
+                                          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 150 }}>
                                             <input value={finalCostInputs[part.id] ?? part.unit_cost ?? ""} onChange={e => setFinalCostInputs(prev => ({ ...prev, [part.id]: e.target.value }))} type="number" placeholder={t(lang,"unitCostLabel")}
                                               style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }} />
-                                            <div style={{ display: "flex", gap: 6 }}>
-                                              <Btn small onClick={() => approvePartEngineer(part, log.id, finalCostInputs[part.id] ?? part.unit_cost)} disabled={saving} color={C.green}>✓ {t(lang,"finalApprove")}</Btn>
+                                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                              {part.asset_part_id && (
+                                                <Btn small onClick={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Stock")} disabled={saving} color={C.green}>✓ {t(lang,"useStock")}</Btn>
+                                              )}
+                                              <Btn small onClick={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Order")} disabled={saving} color={C.blue}>📦 {t(lang,"orderPart")}</Btn>
                                               <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
                                             </div>
                                           </div>
@@ -1767,15 +1756,18 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
     const assetForPart = (assets||[]).find(a => a.name === wo.asset);
-    // Requesting maintenance waits for supervisor, then engineer's final cost sign-off.
-    // A supervisor/admin adding it themselves skips straight to awaiting the engineer.
-    // An engineer adding it themselves is the final word already — auto-approved.
-    const initialStatus = isEngineer ? "Approved" : isSupervisor ? "Supervisor Approved" : "Pending";
+    // Maintenance and supervisor both just request — engineer/admin gives the one final approval.
+    // An engineer/admin adding it themselves is the final word already, so it auto-approves,
+    // fulfilled from stock if there's enough on hand, otherwise flagged to be ordered.
     const now = new Date().toISOString();
+    let approvalStatus = "Pending", approvedBy = null, approvedAt = null, fulfillmentType = null;
+    if (isEngineer) {
+      const stockAvailable = await getPartStock(cleanModelPartId, cleanAssetPartId);
+      fulfillmentType = stockAvailable !== null && stockAvailable >= qty ? "Stock" : "Order";
+      approvalStatus = "Approved"; approvedBy = userRole?.name; approvedAt = now;
+    }
     const record = { id: uid("PRT"), log_id: logId, asset_id: assetForPart?.id||null, part_name: partForm.part_name, part_number: partForm.part_number||null, quantity: qty, unit_cost: unitCost, total_cost: qty*unitCost, supplier: partForm.supplier||null, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId,
-      approval_status: initialStatus,
-      supervisor_approved_by: initialStatus!=="Pending" ? userRole?.name : null, supervisor_approved_at: initialStatus!=="Pending" ? now : null,
-      approved_by: initialStatus==="Approved" ? userRole?.name : null, approved_at: initialStatus==="Approved" ? now : null };
+      approval_status: approvalStatus, approved_by: approvedBy, approved_at: approvedAt, fulfillment_type: fulfillmentType };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
       setSuccess("✓");
@@ -1783,9 +1775,21 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
       setPartForm({ part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
       setShowPartForm(null);
       setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) + (qty*unitCost) } : l));
-      if (initialStatus==="Approved") await deductPartStock(cleanModelPartId, cleanAssetPartId, qty);
+      if (fulfillmentType==="Stock") await deductPartStock(cleanModelPartId, cleanAssetPartId, qty);
     }
     setSaving(false);
+  };
+
+  const getPartStock = async (modelPartId, assetPartId) => {
+    if (modelPartId) {
+      const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", modelPartId).single();
+      return mp ? (mp.stock_quantity||0) : null;
+    }
+    if (assetPartId) {
+      const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", assetPartId).single();
+      return ap ? (ap.stock_quantity||0) : null;
+    }
+    return null; // new/uncatalogued part — nothing to check
   };
 
   const deductPartStock = async (modelPartId, assetPartId, qty) => {
@@ -1799,28 +1803,23 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     }
   };
 
-  // Stage 1: supervisor signs off on the request itself (not the cost).
-  const approvePartSupervisor = async (part, logId) => {
+  // Engineer/admin final approval — sets the confirmed cost and decides fulfillment.
+  const approvePart = async (part, logId, finalUnitCost, fulfillment) => {
     setSaving(true); setError(null);
-    const now = new Date().toISOString();
-    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now, rejection_reason: null }).eq("id", part.id);
-    if (err) { setError(err.message); } else {
-      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Supervisor Approved", supervisor_approved_by: userRole?.name, supervisor_approved_at: now } : p) }));
+    if (fulfillment === "Stock") {
+      const stockAvailable = await getPartStock(part.model_part_id, part.asset_part_id);
+      if (stockAvailable === null || stockAvailable < part.quantity) {
+        setError(t(lang,"insufficientStock")); setSaving(false); return;
+      }
     }
-    setSaving(false);
-  };
-
-  // Stage 2: engineer gives the final word and confirms/sets the actual cost.
-  const approvePartEngineer = async (part, logId, finalUnitCost) => {
-    setSaving(true); setError(null);
     const now = new Date().toISOString();
     const unitCost = parseFloat(finalUnitCost)||0;
     const totalCost = unitCost * part.quantity;
-    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, rejection_reason: null }).eq("id", part.id);
+    const { error: err } = await supabase.from("spare_parts").update({ approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, fulfillment_type: fulfillment, rejection_reason: null }).eq("id", part.id);
     if (err) { setError(err.message); } else {
-      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost } : p) }));
+      setParts(prev => ({ ...prev, [logId]: prev[logId].map(p => p.id===part.id ? { ...p, approval_status: "Approved", approved_by: userRole?.name, approved_at: now, unit_cost: unitCost, total_cost: totalCost, fulfillment_type: fulfillment } : p) }));
       setLogs(prev => prev.map(l => l.id===logId ? { ...l, cost: (l.cost||0) - (part.total_cost||0) + totalCost } : l));
-      await deductPartStock(part.model_part_id, part.asset_part_id, part.quantity);
+      if (fulfillment === "Stock") await deductPartStock(part.model_part_id, part.asset_part_id, part.quantity);
     }
     setSaving(false);
   };
@@ -2025,25 +2024,16 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
                                     <td style={{ padding: "8px 10px", color: C.accent, fontWeight: 700 }}>{part.total_cost?`$${part.total_cost}`:"—"}</td>
                                     <td style={{ padding: "8px 10px", color: C.subtle }}>{part.supplier||"—"}</td>
                                     <td style={{ padding: "8px 10px" }}>
-                                      <Badge label={part.approval_status==="Approved"?t(lang,"approved"):part.approval_status==="Rejected"?t(lang,"rejected"):part.approval_status==="Supervisor Approved"?t(lang,"supervisorApproved"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:part.approval_status==="Supervisor Approved"?C.blue:C.yellow} />
-                                      {isSupervisor && !isEngineer && part.approval_status==="Pending" && (
-                                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                          <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.green}>✓ {t(lang,"approve")}</Btn>
-                                          <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
-                                        </div>
-                                      )}
+                                      <Badge label={part.approval_status==="Approved"?`${t(lang,"approved")}${part.fulfillment_type?` · ${part.fulfillment_type==="Stock"?t(lang,"fulfilledFromStock"):t(lang,"toBeOrdered")}`:""}`:part.approval_status==="Rejected"?t(lang,"rejected"):t(lang,"pendingApproval")} color={part.approval_status==="Approved"?C.green:part.approval_status==="Rejected"?C.red:C.yellow} />
                                       {isEngineer && part.approval_status==="Pending" && (
-                                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                          <Btn small onClick={() => approvePartSupervisor(part, log.id)} disabled={saving} color={C.blue}>✓ {t(lang,"approve")} ({t(lang,"supervisorRole")})</Btn>
-                                          <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
-                                        </div>
-                                      )}
-                                      {isEngineer && part.approval_status==="Supervisor Approved" && (
-                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 140 }}>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 150 }}>
                                           <input value={finalCostInputs[part.id] ?? part.unit_cost ?? ""} onChange={e => setFinalCostInputs(prev => ({ ...prev, [part.id]: e.target.value }))} type="number" placeholder={t(lang,"unitCostLabel")}
                                             style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }} />
-                                          <div style={{ display: "flex", gap: 6 }}>
-                                            <Btn small onClick={() => approvePartEngineer(part, log.id, finalCostInputs[part.id] ?? part.unit_cost)} disabled={saving} color={C.green}>✓ {t(lang,"finalApprove")}</Btn>
+                                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                            {(part.asset_part_id || part.model_part_id) && (
+                                              <Btn small onClick={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Stock")} disabled={saving} color={C.green}>✓ {t(lang,"useStock")}</Btn>
+                                            )}
+                                            <Btn small onClick={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Order")} disabled={saving} color={C.blue}>📦 {t(lang,"orderPart")}</Btn>
                                             <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
                                           </div>
                                         </div>

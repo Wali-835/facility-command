@@ -304,6 +304,8 @@ export default function AssetPage() {
   const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
   const [updateNote, setUpdateNote] = useState("");
   const [checklistWO, setChecklistWO] = useState(null);
+  const [editingTargetDate, setEditingTargetDate] = useState(null);
+  const [targetDateInput, setTargetDateInput] = useState("");
 
   const assetId = new URLSearchParams(window.location.search).get("asset");
 
@@ -424,6 +426,17 @@ export default function AssetPage() {
       setBrkForm({ reported_by: "", severity: "High", description: "", target_date: "" });
     }
     setSaving(false);
+  };
+
+  const saveBreakdownTargetDate = async (b) => {
+    const { error: err } = await supabase.from("breakdown_reports").update({ target_date: targetDateInput||null }).eq("id", b.id);
+    if (err) { setError(err.message); return; }
+    setBreakdowns(prev => prev.map(x => x.id===b.id ? { ...x, target_date: targetDateInput||null } : x));
+    if (b.work_order_id) {
+      await supabase.from("work_orders").update({ due: targetDateInput||null }).eq("id", b.work_order_id);
+      setWorkOrders(prev => prev.map(w => w.id===b.work_order_id ? { ...w, due: targetDateInput||null } : w));
+    }
+    setEditingTargetDate(null);
   };
 
   // ─── Issue Form ───────────────────────────────────────────────────────────
@@ -555,19 +568,24 @@ export default function AssetPage() {
     const isModelLevel = rawId && String(rawId).startsWith("mdl-");
     const cleanAssetPartId = isModelLevel ? null : rawId || null;
     const cleanModelPartId = partForm.model_part_id || null;
-    const initialStatus = isEngineer ? "Approved" : isSupervisor ? "Supervisor Approved" : "Pending";
     const now = new Date().toISOString();
+    let approvalStatus = "Pending", approvedBy = null, approvedAt = null, fulfillmentType = null;
+    if (isEngineer) {
+      let stockAvailable = null;
+      if (cleanModelPartId) { const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", cleanModelPartId).single(); stockAvailable = mp ? (mp.stock_quantity||0) : null; }
+      else if (cleanAssetPartId) { const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanAssetPartId).single(); stockAvailable = ap ? (ap.stock_quantity||0) : null; }
+      fulfillmentType = stockAvailable !== null && stockAvailable >= qty ? "Stock" : "Order";
+      approvalStatus = "Approved"; approvedBy = userRole?.name; approvedAt = now;
+    }
     const record = { id: uid("PRT"), log_id: partForm.log_id, asset_id: asset.id, part_name: partForm.part_name, part_number: partForm.part_number, quantity: qty, unit_cost: unitCost, total_cost: qty * unitCost, supplier: partForm.supplier, asset_part_id: cleanAssetPartId, model_part_id: cleanModelPartId,
-      approval_status: initialStatus,
-      supervisor_approved_by: initialStatus!=="Pending" ? userRole?.name : null, supervisor_approved_at: initialStatus!=="Pending" ? now : null,
-      approved_by: initialStatus==="Approved" ? userRole?.name : null, approved_at: initialStatus==="Approved" ? now : null };
+      approval_status: approvalStatus, approved_by: approvedBy, approved_at: approvedAt, fulfillment_type: fulfillmentType };
     const { error: err } = await supabase.from("spare_parts").insert([record]);
     if (err) { setError(err.message); } else {
-      if (initialStatus==="Approved") {
+      if (fulfillmentType==="Stock") {
         if (cleanModelPartId) { const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", cleanModelPartId).single(); if (mp) await supabase.from("model_parts").update({ stock_quantity: Math.max(0,(mp.stock_quantity||0)-qty) }).eq("id", cleanModelPartId); }
         if (cleanAssetPartId) { const { data: ap } = await supabase.from("asset_parts").select("stock_quantity").eq("id", cleanAssetPartId).single(); if (ap) await supabase.from("asset_parts").update({ stock_quantity: Math.max(0,(ap.stock_quantity||0)-qty) }).eq("id", cleanAssetPartId); }
       }
-      setSuccess(initialStatus==="Pending" ? "Spare part requested — awaiting supervisor approval." : initialStatus==="Supervisor Approved" ? "Spare part requested — awaiting engineer's final approval." : "Spare part added!");
+      setSuccess(approvalStatus==="Pending" ? "Spare part requested — awaiting engineer/admin approval." : fulfillmentType==="Stock" ? "Spare part added and deducted from stock!" : "Spare part added — flagged to be ordered.");
       setPartForm({ log_id: "", part_name: "", part_number: "", quantity: "1", unit_cost: "", supplier: "", asset_part_id: null, model_part_id: null });
     }
     setSaving(false);
@@ -666,10 +684,8 @@ export default function AssetPage() {
           )}
           {/* Action Buttons */}
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {/* Everyone can report — unless there's already an open item, in which case they add an update to it */}
-            {firstOpenReport ? (
-              <Btn onClick={() => { setUpdateTarget(firstOpenReport); setView("add-update"); }} color={C.blue}>📝 {t(lang,"addUpdate")}</Btn>
-            ) : (
+            {/* Everyone can report — unless there's already an open item, in which case Add Update lives in the Breakdowns & Issues list below */}
+            {!firstOpenReport && (
               <>
                 <Btn onClick={() => setView("breakdown")} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
                 <Btn onClick={() => setView("issue")} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
@@ -771,8 +787,21 @@ export default function AssetPage() {
                       </div>
                       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{b.reported_by} · {fmtDateTime(b.reported_at)}</div>
                       <div style={{ fontSize: 13, color: C.subtle, marginBottom: 10 }}>{b.description}</div>
-                      {b.target_date && b.status !== "Resolved" && (
-                        <div style={{ fontSize: 12, color: b.target_date < TODAY ? C.red : C.muted, marginBottom: 10 }}>🎯 {t(lang,"targetResolutionDate")}: {b.target_date}</div>
+                      {b.status !== "Resolved" && (
+                        editingTargetDate===b.id ? (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}>
+                            <input type="date" value={targetDateInput} onChange={e => setTargetDateInput(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", color: C.text, fontSize: 12 }} />
+                            <Btn small onClick={() => saveBreakdownTargetDate(b)}>Save</Btn>
+                            <Btn small secondary onClick={() => setEditingTargetDate(null)}>Cancel</Btn>
+                          </div>
+                        ) : (b.target_date ? (
+                          <div style={{ fontSize: 12, color: b.target_date < TODAY ? C.red : C.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                            🎯 {t(lang,"targetResolutionDate")}: {b.target_date}
+                            {isSupervisor || isEngineer ? <button onClick={() => { setEditingTargetDate(b.id); setTargetDateInput(b.target_date||""); }} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11 }}>✏️</button> : null}
+                          </div>
+                        ) : (isSupervisor || isEngineer) && (
+                          <button onClick={() => { setEditingTargetDate(b.id); setTargetDateInput(""); }} style={{ background: "none", border: `1px dashed ${C.border}`, borderRadius: 4, padding: "4px 8px", color: C.muted, cursor: "pointer", fontSize: 11, marginBottom: 10 }}>+ {t(lang,"targetResolutionDate")}</button>
+                        ))
                       )}
                       <UpdatesLog updates={b.updates} />
                       {b.status !== "Resolved" && (
