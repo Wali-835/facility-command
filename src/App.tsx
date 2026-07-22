@@ -2769,70 +2769,32 @@ function AssetDocumentsModal({ asset, onClose, lang, userRole, isAdmin }) {
   );
 }
 
-function InsurancePoliciesModal({ asset, onClose, lang, isAdmin }) {
+function InsurancePoliciesModal({ asset, onClose, lang }) {
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [form, setForm] = useState({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
-  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
 
   useEffect(() => { loadPolicies(); }, [asset.id]);
 
   const loadPolicies = async () => {
     setLoading(true);
-    const { data } = await supabase.from("insurance_policies").select("*").eq("asset_id", asset.id).order("expiry_date", { ascending: true });
+    const { data: links } = await supabase.from("insurance_policy_assets").select("policy_id").eq("asset_id", asset.id);
+    const ids = [...new Set((links||[]).map(l => l.policy_id))];
+    if (!ids.length) { setPolicies([]); setLoading(false); return; }
+    const { data } = await supabase.from("insurance_policies").select("*").in("id", ids).order("expiry_date", { ascending: true });
     setPolicies(data || []);
     setLoading(false);
   };
 
-  const submit = async () => {
-    if (!form.provider) { setError(t(lang,"provider")); return; }
-    setSaving(true); setError(null);
-    const record = { id: uid("INS"), asset_id: asset.id, asset_name: asset.name, provider: form.provider, policy_number: form.policy_number||null, coverage_type: form.coverage_type||null, start_date: form.start_date||null, expiry_date: form.expiry_date||null, premium: form.premium?parseFloat(form.premium):null, notes: form.notes||null };
-    const { error: err } = await supabase.from("insurance_policies").insert([record]);
-    if (err) { setError(err.message); } else {
-      setPolicies(prev => [...prev, record].sort((a,b) => (a.expiry_date||"").localeCompare(b.expiry_date||"")));
-      setForm({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
-      setShowForm(false);
-    }
-    setSaving(false);
-  };
-
-  const deletePolicy = async (id) => { await supabase.from("insurance_policies").delete().eq("id", id); setPolicies(prev => prev.filter(p => p.id !== id)); };
+  const docUrl = (p) => p.file_path ? supabase.storage.from("asset-documents").getPublicUrl(p.file_path).data.publicUrl : null;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 680, marginTop: 20, marginBottom: 20 }}>
         <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div><div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>🛡️ {t(lang,"insurance")} — {asset.name}</div></div>
+          <div><div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>🛡️ {t(lang,"insurance")} — {asset.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{t(lang,"manageInInsuranceTab")}</div></div>
           <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
         </div>
         <div style={{ padding: 24 }}>
-          <ErrBanner msg={error} onDismiss={() => setError(null)} />
-          <div style={{ marginBottom: 16 }}>
-            <Btn small onClick={() => setShowForm(v => !v)}>{t(lang,"addPolicy")}</Btn>
-          </div>
-          {showForm && (
-            <div style={{ background: C.surface, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-                <Input label={t(lang,"provider")} value={form.provider} onChange={f("provider")} />
-                <Input label={t(lang,"policyNumber")} value={form.policy_number} onChange={f("policy_number")} />
-                <Input label={t(lang,"coverageType")} value={form.coverage_type} onChange={f("coverage_type")} />
-                <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
-                <Input label={t(lang,"expiryDate")} value={form.expiry_date} onChange={f("expiry_date")} type="date" />
-                <Input label={t(lang,"premium")} value={form.premium} onChange={f("premium")} type="number" />
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <Textarea label={t(lang,"notes")} value={form.notes} onChange={f("notes")} />
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <Btn small onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
-                <Btn small variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
-              </div>
-            </div>
-          )}
           {loading ? <Spinner lang={lang} /> : policies.length === 0 ? (
             <div style={{ textAlign: "center", padding: 32, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>{t(lang,"noPoliciesYet")}</div>
           ) : (
@@ -2844,11 +2806,9 @@ function InsurancePoliciesModal({ asset, onClose, lang, isAdmin }) {
                       <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{p.provider} {p.policy_number?`(${p.policy_number})`:""}</div>
                       <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{p.coverage_type||"—"} · {p.start_date?fmtDate(p.start_date):"—"} → {p.expiry_date?fmtDate(p.expiry_date):"—"}{p.premium?` · $${p.premium}`:""}</div>
                       {p.notes && <div style={{ fontSize: 12, color: C.subtle, marginTop: 4 }}>{p.notes}</div>}
+                      {docUrl(p) && <button onClick={() => window.open(docUrl(p), "_blank")} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12, padding: 0, marginTop: 4 }}>📄 {p.file_name}</button>}
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      {p.expiry_date && p.expiry_date < TODAY && <Badge label={t(lang,"expired")} color={C.red} />}
-                      {isAdmin && <Btn small variant="danger" onClick={() => deletePolicy(p.id)}>{t(lang,"del")}</Btn>}
-                    </div>
+                    {p.expiry_date && p.expiry_date < TODAY && <Badge label={t(lang,"expired")} color={C.red} />}
                   </div>
                 </div>
               ))}
@@ -2856,6 +2816,202 @@ function InsurancePoliciesModal({ asset, onClose, lang, isAdmin }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function InsuranceManagement({ assets, isAdmin, lang, sites }) {
+  const [policies, setPolicies] = useState([]);
+  const [links, setLinks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [assetSearch, setAssetSearch] = useState("");
+  const [assetSiteFilter, setAssetSiteFilter] = useState("All");
+  const [selectedAssetIds, setSelectedAssetIds] = useState([]);
+  const [pendingFile, setPendingFile] = useState(null);
+  const [editingCoverage, setEditingCoverage] = useState(null);
+  const [coverageSelected, setCoverageSelected] = useState([]);
+  const [coverageSearch, setCoverageSearch] = useState("");
+  const [form, setForm] = useState({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
+  const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+
+  useEffect(() => { loadAll(); }, []);
+
+  const loadAll = async () => {
+    setLoading(true);
+    const [pRes, lRes] = await Promise.all([
+      supabase.from("insurance_policies").select("*").order("expiry_date", { ascending: true }),
+      supabase.from("insurance_policy_assets").select("*"),
+    ]);
+    setPolicies(pRes.data || []);
+    setLinks(lRes.data || []);
+    setLoading(false);
+  };
+
+  const coveredAssetsFor = (policyId) => links.filter(l => l.policy_id === policyId);
+  const docUrl = (p) => p.file_path ? supabase.storage.from("asset-documents").getPublicUrl(p.file_path).data.publicUrl : null;
+  const toggleAsset = (id) => setSelectedAssetIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleCoverageAsset = (id) => setCoverageSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  const submit = async () => {
+    if (!form.provider) { setError(t(lang,"provider")); return; }
+    if (selectedAssetIds.length === 0) { setError(t(lang,"selectAtLeastOneAsset")); return; }
+    setSaving(true); setError(null);
+    const policyId = uid("INS");
+    let filePath = null, fileName = null;
+    if (pendingFile) {
+      setUploading(true);
+      const path = `policy-docs/${policyId}/${pendingFile.name}`;
+      const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, pendingFile);
+      setUploading(false);
+      if (upErr) { setError(upErr.message); setSaving(false); return; }
+      filePath = path; fileName = pendingFile.name;
+    }
+    const record = { id: policyId, provider: form.provider, policy_number: form.policy_number||null, coverage_type: form.coverage_type||null, start_date: form.start_date||null, expiry_date: form.expiry_date||null, premium: form.premium?parseFloat(form.premium):null, notes: form.notes||null, file_name: fileName, file_path: filePath };
+    const { error: err } = await supabase.from("insurance_policies").insert([record]);
+    if (err) { setError(err.message); setSaving(false); return; }
+    const linkRecords = selectedAssetIds.map(aid => { const a = assets.find(x => x.id===aid); return { id: uid("IPA"), policy_id: policyId, asset_id: aid, asset_name: a?.name||"" }; });
+    const { error: linkErr } = await supabase.from("insurance_policy_assets").insert(linkRecords);
+    if (linkErr) { setError(linkErr.message); setSaving(false); return; }
+    setPolicies(prev => [...prev, record]);
+    setLinks(prev => [...prev, ...linkRecords]);
+    setForm({ provider: "", policy_number: "", coverage_type: "", start_date: "", expiry_date: "", premium: "", notes: "" });
+    setSelectedAssetIds([]); setPendingFile(null); setAssetSearch(""); setAssetSiteFilter("All");
+    setShowForm(false);
+    setSaving(false);
+  };
+
+  const deletePolicy = async (id) => {
+    await supabase.from("insurance_policy_assets").delete().eq("policy_id", id);
+    await supabase.from("insurance_policies").delete().eq("id", id);
+    setPolicies(prev => prev.filter(p => p.id !== id));
+    setLinks(prev => prev.filter(l => l.policy_id !== id));
+  };
+
+  const openCoverageEditor = (policy) => {
+    setEditingCoverage(policy.id);
+    setCoverageSelected(coveredAssetsFor(policy.id).map(l => l.asset_id));
+    setCoverageSearch("");
+  };
+
+  const saveCoverage = async (policyId) => {
+    setSaving(true); setError(null);
+    const current = coveredAssetsFor(policyId).map(l => l.asset_id);
+    const toAdd = coverageSelected.filter(id => !current.includes(id));
+    const toRemove = current.filter(id => !coverageSelected.includes(id));
+    if (toRemove.length) await supabase.from("insurance_policy_assets").delete().eq("policy_id", policyId).in("asset_id", toRemove);
+    if (toAdd.length) {
+      const newLinks = toAdd.map(aid => { const a = assets.find(x => x.id===aid); return { id: uid("IPA"), policy_id: policyId, asset_id: aid, asset_name: a?.name||"" }; });
+      const { error: err } = await supabase.from("insurance_policy_assets").insert(newLinks);
+      if (err) { setError(err.message); setSaving(false); return; }
+    }
+    await loadAll();
+    setEditingCoverage(null);
+    setSaving(false);
+  };
+
+  const AssetPicker = ({ selected, onToggle, search, onSearch, siteFilter, onSiteFilter }) => (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={search} onChange={e => onSearch(e.target.value)} placeholder={t(lang,"searchAssets")}
+          style={{ flex: 1, minWidth: 160, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }} />
+        {onSiteFilter && (
+          <select value={siteFilter} onChange={e => onSiteFilter(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+            <option value="All">{t(lang,"all")} {t(lang,"site")}</option>
+            {sites.filter(s => s !== "— Select Site —").map(s => <option key={s}>{s}</option>)}
+          </select>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{selected.length} {t(lang,"selected")}</div>
+      <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+        {assets.filter(a => (!search || a.name.toLowerCase().includes(search.toLowerCase())) && (!siteFilter || siteFilter==="All" || a.location===siteFilter)).map(a => (
+          <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.subtle, cursor: "pointer", padding: "4px 6px" }}>
+            <input type="checkbox" checked={selected.includes(a.id)} onChange={() => onToggle(a.id)} />
+            {a.name} <span style={{ color: C.muted }}>({a.location})</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <ErrBanner msg={error} onDismiss={() => setError(null)} />
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}>
+        <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newPolicy")}</Btn>
+      </div>
+      {showForm && (
+        <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+          <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"newPolicy")}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+            <Input label={t(lang,"provider")} value={form.provider} onChange={f("provider")} />
+            <Input label={t(lang,"policyNumber")} value={form.policy_number} onChange={f("policy_number")} />
+            <Input label={t(lang,"coverageType")} value={form.coverage_type} onChange={f("coverage_type")} />
+            <Input label={t(lang,"startDate")} value={form.start_date} onChange={f("start_date")} type="date" />
+            <Input label={t(lang,"expiryDate")} value={form.expiry_date} onChange={f("expiry_date")} type="date" />
+            <Input label={t(lang,"premium")} value={form.premium} onChange={f("premium")} type="number" />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Textarea label={t(lang,"notes")} value={form.notes} onChange={f("notes")} />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>{t(lang,"policyDocument")}</div>
+            <input type="file" onChange={e => setPendingFile(e.target.files[0]||null)} style={{ fontSize: 12, color: C.subtle }} />
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"coveredAssets")}</div>
+            <AssetPicker selected={selectedAssetIds} onToggle={toggleAsset} search={assetSearch} onSearch={setAssetSearch} siteFilter={assetSiteFilter} onSiteFilter={setAssetSiteFilter} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn onClick={submit} disabled={saving||uploading}>{saving||uploading?t(lang,"saving"):t(lang,"create")}</Btn>
+            <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      )}
+      {loading ? <Spinner lang={lang} /> : policies.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.muted, fontSize: 13 }}>{t(lang,"noPoliciesYet")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {policies.map(p => (
+            <div key={p.id} style={{ background: C.card, border: `1px solid ${p.expiry_date && p.expiry_date < TODAY ? C.red+"44" : C.border}`, borderRadius: 10, padding: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 14, color: C.text, fontWeight: 700 }}>{p.provider} {p.policy_number?`(${p.policy_number})`:""}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{p.coverage_type||"—"} · {p.start_date?fmtDate(p.start_date):"—"} → {p.expiry_date?fmtDate(p.expiry_date):"—"}{p.premium?` · $${p.premium}`:""}</div>
+                  {p.notes && <div style={{ fontSize: 12, color: C.subtle, marginTop: 6 }}>{p.notes}</div>}
+                  {docUrl(p) && <button onClick={() => window.open(docUrl(p), "_blank")} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12, padding: 0, marginTop: 6 }}>📄 {p.file_name}</button>}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {p.expiry_date && p.expiry_date < TODAY && <Badge label={t(lang,"expired")} color={C.red} />}
+                  {isAdmin && <Btn small variant="danger" onClick={() => deletePolicy(p.id)}>{t(lang,"del")}</Btn>}
+                </div>
+              </div>
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{t(lang,"coveredAssets")} ({coveredAssetsFor(p.id).length})</div>
+                  <Btn small variant="secondary" onClick={() => editingCoverage===p.id ? setEditingCoverage(null) : openCoverageEditor(p)}>{editingCoverage===p.id ? t(lang,"cancel") : t(lang,"editCoverage")}</Btn>
+                </div>
+                {editingCoverage===p.id ? (
+                  <div>
+                    <AssetPicker selected={coverageSelected} onToggle={toggleCoverageAsset} search={coverageSearch} onSearch={setCoverageSearch} siteFilter={null} onSiteFilter={null} />
+                    <div style={{ marginTop: 10 }}>
+                      <Btn small onClick={() => saveCoverage(p.id)} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {coveredAssetsFor(p.id).map(l => <Badge key={l.id} label={l.asset_name} color={C.muted} />)}
+                    {coveredAssetsFor(p.id).length===0 && <span style={{ fontSize: 12, color: C.muted }}>{t(lang,"noAssetsLinked")}</span>}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3698,8 +3854,14 @@ function InsuranceExpiryAlerts({ lang, isSupervisor }) {
   useEffect(() => {
     const soon = new Date(); soon.setDate(soon.getDate()+30);
     const soonStr = soon.toISOString().split("T")[0];
-    supabase.from("insurance_policies").select("*").not("expiry_date","is",null).lte("expiry_date",soonStr).order("expiry_date")
-      .then(({ data }) => setExpiring(data||[]));
+    Promise.all([
+      supabase.from("insurance_policies").select("*").not("expiry_date","is",null).lte("expiry_date",soonStr).order("expiry_date"),
+      supabase.from("insurance_policy_assets").select("policy_id"),
+    ]).then(([pRes, lRes]) => {
+      const counts = {};
+      (lRes.data||[]).forEach(l => { counts[l.policy_id] = (counts[l.policy_id]||0)+1; });
+      setExpiring((pRes.data||[]).map(p => ({ ...p, assetCount: counts[p.id]||0 })));
+    });
   }, []);
   if (!expiring.length || !isSupervisor) return null;
   return (
@@ -3708,7 +3870,7 @@ function InsuranceExpiryAlerts({ lang, isSupervisor }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {expiring.slice(0,5).map(p => (
           <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.subtle }}>
-            <span><strong style={{ color: C.text }}>{p.asset_name}</strong> — {p.provider||"—"} {p.policy_number?`(${p.policy_number})`:""}</span>
+            <span><strong style={{ color: C.text }}>{p.provider||"—"}</strong> {p.policy_number?`(${p.policy_number})`:""} — {p.assetCount} {t(lang,"assets")}</span>
             <span style={{ color: p.expiry_date<TODAY?C.red:C.yellow, fontWeight: 700 }}>{p.expiry_date<TODAY?t(lang,"expired"):t(lang,"expiresOn")} {fmtDate(p.expiry_date)}</span>
           </div>
         ))}
@@ -4828,6 +4990,7 @@ export default function App() {
     ...(isSupervisor ? [t(lang,"pendingApprovalsSection")] : []),
     ...(userRole.role === "maintenance" || userRole.role === "engineer" ? [t(lang,"mySubmissions")] : []),
     ...(isMaintenance ? [t(lang,"workOrders"), t(lang,"assets"), t(lang,"vendors"), t(lang,"pmPlanner"), t(lang,"reports"), t(lang,"calendar")] : []),
+    ...(isSupervisor ? [t(lang,"insurance")] : []),
     ...(isAdmin ? [t(lang,"partsCatalogMgmt"), t(lang,"users"), t(lang,"sitesManagement")] : []),
   ];
   const activeTab = tab || tabs[0];
@@ -4886,6 +5049,7 @@ export default function App() {
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
         {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"insurance") && isSupervisor && <InsuranceManagement assets={assets} isAdmin={isAdmin} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
