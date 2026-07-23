@@ -629,7 +629,8 @@ export default function AssetPage() {
       <div style={{ background: C.accent, borderRadius: 12, padding: 20, marginBottom: 20, textAlign: "center" }}>
         <div style={{ fontSize: 32, marginBottom: 8 }}>🏭</div>
         <div style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>{asset?.name}</div>
-        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginTop: 4 }}>{asset?.category} · {asset?.location}</div>
+        {asset?.asset_code && <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.9)", marginTop: 2 }}>{asset.asset_code}</div>}
+        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginTop: 4 }}>{asset?.category}{asset?.subcategory ? ` · ${asset.subcategory}` : ""} · {asset?.location}</div>
         {asset?.brand && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>{asset.brand} {asset.model}</div>}
         <div style={{ marginTop: 10, display: "inline-block", background: statusColor(asset?.status)+"33", color: statusColor(asset?.status), border: `1px solid ${statusColor(asset?.status)}66`, borderRadius: 6, padding: "4px 12px", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>
           {asset?.status}
@@ -970,7 +971,7 @@ export default function AssetPage() {
           <SectionHeader title="📄 Equipment Specs" onBack={() => setView("home")} />
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
-              {[["Name",asset?.name],["Category",asset?.category],["Site",asset?.location],["Owner",asset?.owner||"—"],["Brand",asset?.brand||"—"],["Model",asset?.model||"—"],["Serial No.",asset?.serial_number||"—"],["Manufacture Date",asset?.manufacture_date?fmtDate(asset.manufacture_date):"—"],["Est. Value",asset?.value||"—"],["PM Every",asset?.pm_frequency?`${asset.pm_frequency} mo.`:"—"],["Last PM",asset?.last_pm_date?fmtDate(asset.last_pm_date):"Never"],["Next Service",asset?.next_service?fmtDate(asset.next_service):"—"]].map(([lbl,val]) => (
+              {[["Name",asset?.name],["Asset Code",asset?.asset_code||"—"],["Category",asset?.category],["Subcategory",asset?.subcategory||"—"],["Site",asset?.location],["Owner",asset?.owner||"—"],["Brand",asset?.brand||"—"],["Model",asset?.model||"—"],["Serial No.",asset?.serial_number||"—"],["Manufacture Date",asset?.manufacture_date?fmtDate(asset.manufacture_date):"—"],["Est. Value",asset?.value||"—"],["PM Every",asset?.pm_frequency?`${asset.pm_frequency} mo.`:"—"],["Last PM",asset?.last_pm_date?fmtDate(asset.last_pm_date):"Never"],["Next Service",asset?.next_service?fmtDate(asset.next_service):"—"]].map(([lbl,val]) => (
                 <div key={lbl}>
                   <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>{lbl}</div>
                   <div style={{ fontSize: 13, color: C.subtle, marginTop: 2 }}>{val}</div>

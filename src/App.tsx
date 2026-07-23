@@ -31,7 +31,15 @@ const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 const TODAY = new Date().toISOString().split("T")[0];
 const uid = (p) => `${p}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2,5).toUpperCase()}`;
 // Postgres unique-violation (23505) on assets.serial_number -> friendly message; anything else -> raw DB message.
-const assetDbErrorMessage = (err, lang) => err?.code === "23505" ? t(lang,"duplicateSerialNumber") : err.message;
+const assetDbErrorMessage = (err, lang) => {
+  if (err?.code !== "23505") return err.message;
+  return err?.message?.includes("asset_code") ? t(lang,"duplicateAssetCode") : t(lang,"duplicateSerialNumber");
+};
+// Category -> suggested subcategories. Free text is still allowed for anything not listed here.
+const CATEGORY_SUBCATEGORIES = {
+  "MHE": ["Reach Truck","Electric Forklift","Diesel Forklift","Hand Pallet Truck","Transpalette Single","Transpalette Double"],
+  "HVAC": ["AC Split Unit","Cold Room","Freezer"],
+};
 // Natural sort so "Site2" comes before "Site10" (plain string sort puts "Site10" first).
 const byNameNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
 const priorityColor = (p) => ({ Critical: C.red, High: C.accent, Medium: C.yellow, Low: C.green }[p] || C.muted);
@@ -3072,6 +3080,7 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels, sites, error }
         model: modelName,
         brand: found.brand || p.brand || "",
         category: p.category || found.subcategory || found.category || "",
+        subcategory: p.subcategory || found.subcategory || "",
         technical_specs: found.technical_specs || p.technical_specs || "",
       }));
     }
@@ -3084,7 +3093,17 @@ function AssetEditModal({ data, onSave, onClose, lang, mheModels, sites, error }
         {error && <div style={{ background: C.red+"22", border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
           <Input label={t(lang,"assetName")} value={form.name||""} onChange={f("name")} />
+          <Input label={t(lang,"assetCode")} value={form.asset_code||""} onChange={f("asset_code")} />
           <Input label={t(lang,"category")} value={form.category||""} onChange={f("category")} />
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"subcategory")}</div>
+            <input list="subcats-edit" value={form.subcategory||""} onChange={e => f("subcategory")(e.target.value)}
+              placeholder="e.g. Reach Truck"
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+            <datalist id="subcats-edit">
+              {(CATEGORY_SUBCATEGORIES[form.category] || []).map(s => <option key={s} value={s} />)}
+            </datalist>
+          </div>
           <Sel label={t(lang,"site")} value={form.location||""} onChange={f("location")} options={sites} />
           <Input label={t(lang,"owner")} value={form.owner||""} onChange={f("owner")} />
           <div>
@@ -3135,7 +3154,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
   const [docsAsset, setDocsAsset] = useState(null); const [insuranceAsset, setInsuranceAsset] = useState(null);
-  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
+  const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [subcatFilter, setSubcatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
   useEffect(() => {
     supabase.from("mhe_models").select("brand, model, category, subcategory, technical_specs").order("brand").order("model")
@@ -3150,31 +3169,35 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
     const found = mheModels.find(m => m.model === modelName);
     if (found) {
       if (!form.category) f("category")(found.subcategory || found.category || "");
+      if (!form.subcategory) f("subcategory")(found.subcategory || "");
       f("brand")(found.brand || "");
       f("technical_specs")(found.technical_specs || "");
     }
   };
-  const [form, setForm] = useState({ name: "", category: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "", invoice_number: "", po_number: "", purchase_date: "" });
+  const [form, setForm] = useState({ name: "", asset_code: "", category: "", subcategory: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "", invoice_number: "", po_number: "", purchase_date: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const categories = ["All",...new Set(assets.map(a => a.category).filter(Boolean))];
+  const subcategories = ["All",...new Set(assets.map(a => a.subcategory).filter(Boolean))];
   const owners = ["All",...new Set(assets.map(a => a.owner).filter(Boolean))];
 const modelOptions = ["All",...new Set(assets.map(a => a.model).filter(Boolean))];
 const filtered = assets.filter(a =>
   (siteFilter==="All"||a.location===siteFilter) &&
   (catFilter==="All"||a.category===catFilter) &&
+  (subcatFilter==="All"||a.subcategory===subcatFilter) &&
   (ownerFilter==="All"||a.owner===ownerFilter) &&
   (modelFilter==="All"||a.model===modelFilter) &&
-  (!search||a.name.toLowerCase().includes(search.toLowerCase()))
+  (!search||a.name.toLowerCase().includes(search.toLowerCase())||(a.asset_code||"").toLowerCase().includes(search.toLowerCase()))
 );
 
   const submit = async () => {
     if (!form.name) { setError(t(lang,"assetName")); return; }
     if (form.location==="— Select Site —") { setError(t(lang,"site")); return; }
     if (form.serial_number && assets.some(a => a.serial_number === form.serial_number)) { setError(t(lang,"duplicateSerialNumber")); return; }
+    if (form.asset_code && assets.some(a => a.asset_code === form.asset_code)) { setError(t(lang,"duplicateAssetCode")); return; }
     setSaving(true); setError(null);
-    const record = { id: uid("AST"), name: form.name, category: form.category, location: form.location, value: form.value, owner: form.owner||null, brand: form.brand||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null, invoice_number: form.invoice_number||null, po_number: form.po_number||null, purchase_date: form.purchase_date||null };
+    const record = { id: uid("AST"), name: form.name, asset_code: form.asset_code||null, category: form.category, subcategory: form.subcategory||null, location: form.location, value: form.value, owner: form.owner||null, brand: form.brand||null, model: form.model||null, serial_number: form.serial_number||null, manufacture_date: form.manufacture_date||null, technical_specs: form.technical_specs||null, status: "Operational", last_service: TODAY, next_service: form.next_service||null, pm_frequency: parseInt(form.pm_frequency)||1, pm_task: form.pm_task||"Scheduled Maintenance", last_pm_date: null, invoice_number: form.invoice_number||null, po_number: form.po_number||null, purchase_date: form.purchase_date||null };
     const { error: err } = await supabase.from("assets").insert([record]);
-    if (err) { setError(assetDbErrorMessage(err, lang)); } else { onAdd(record); setForm({ name: "", category: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "", invoice_number: "", po_number: "", purchase_date: "" }); setShowForm(false); }
+    if (err) { setError(assetDbErrorMessage(err, lang)); } else { onAdd(record); setForm({ name: "", asset_code: "", category: "", subcategory: "", location: "— Select Site —", value: "", owner: "", brand: "", model: "", serial_number: "", manufacture_date: "", technical_specs: "", next_service: "", pm_frequency: "1", pm_task: "", invoice_number: "", po_number: "", purchase_date: "" }); setShowForm(false); }
     setSaving(false);
   };
 
@@ -3183,7 +3206,7 @@ const filtered = assets.filter(a =>
     const canvas = document.createElement("canvas");
     await QRCode.toCanvas(canvas, url, { width: 300, margin: 2, color: { dark: "#000000", light: "#ffffff" } });
     const win = window.open("", "_blank");
-    win.document.write(`<html><head><title>QR - ${asset.name}</title></head><body style="font-family:Arial;text-align:center;padding:40px;background:white;"><div style="border:2px solid #f97316;border-radius:12px;padding:30px;max-width:400px;margin:0 auto;"><div style="font-size:14px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:2px;">EPx Logistics — Facility Command</div><div style="font-size:22px;font-weight:bold;color:#0d0f12;margin-bottom:4px;">${asset.name}</div><div style="font-size:14px;color:#666;margin-bottom:20px;">${asset.category} · ${asset.location}</div><img src="${canvas.toDataURL()}" style="width:250px;height:250px;" /><div style="font-size:12px;color:#999;margin-top:16px;">${t(lang,"qrScanToReport")}</div><div style="font-size:10px;color:#ccc;margin-top:8px;">${asset.id}</div></div><button onclick="window.print()" style="margin-top:20px;background:#f97316;color:white;border:none;padding:12px 24px;border-radius:8px;font-size:14px;cursor:pointer;">🖨️ Print</button></body></html>`);
+    win.document.write(`<html><head><title>QR - ${asset.name}</title></head><body style="font-family:Arial;text-align:center;padding:40px;background:white;"><div style="border:2px solid #f97316;border-radius:12px;padding:30px;max-width:400px;margin:0 auto;"><div style="font-size:14px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:2px;">EPx Logistics — Facility Command</div><div style="font-size:22px;font-weight:bold;color:#0d0f12;margin-bottom:4px;">${asset.name}</div>${asset.asset_code ? `<div style="font-size:16px;font-weight:bold;color:#f97316;margin-bottom:4px;">${asset.asset_code}</div>` : ""}<div style="font-size:14px;color:#666;margin-bottom:20px;">${asset.category}${asset.subcategory ? ` · ${asset.subcategory}` : ""} · ${asset.location}</div><img src="${canvas.toDataURL()}" style="width:250px;height:250px;" /><div style="font-size:12px;color:#999;margin-top:16px;">${t(lang,"qrScanToReport")}</div><div style="font-size:10px;color:#ccc;margin-top:8px;">${asset.id}</div></div><button onclick="window.print()" style="margin-top:20px;background:#f97316;color:white;border:none;padding:12px 24px;border-radius:8px;font-size:14px;cursor:pointer;">🖨️ Print</button></body></html>`);
     win.document.close();
   };
 
@@ -3222,6 +3245,7 @@ const filtered = assets.filter(a =>
 
   const saveEdit = async (updated) => {
     if (updated.serial_number && assets.some(a => a.id !== updated.id && a.serial_number === updated.serial_number)) { setError(t(lang,"duplicateSerialNumber")); return; }
+    if (updated.asset_code && assets.some(a => a.id !== updated.id && a.asset_code === updated.asset_code)) { setError(t(lang,"duplicateAssetCode")); return; }
     const { error: err } = await supabase.from("assets").update(updated).eq("id",updated.id);
     if (!err) {
       setAssets(prev => prev.map(a => a.id===updated.id?updated:a));
@@ -3250,6 +3274,9 @@ const filtered = assets.filter(a =>
        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
           {categories.map(c => <option key={c}>{c}</option>)}
         </select>
+        <select value={subcatFilter} onChange={e => setSubcatFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+          {subcategories.map(s => <option key={s}>{s}</option>)}
+        </select>
         <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
           {owners.map(o => <option key={o}>{o}</option>)}
         </select>
@@ -3263,7 +3290,17 @@ const filtered = assets.filter(a =>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"registerNewAsset")}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <Input label={t(lang,"assetName")} value={form.name} onChange={f("name")} />
+            <Input label={t(lang,"assetCode")} value={form.asset_code} onChange={f("asset_code")} />
             <Input label={t(lang,"category")} value={form.category} onChange={f("category")} />
+            <div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"subcategory")}</div>
+              <input list="subcats-new" value={form.subcategory} onChange={e => f("subcategory")(e.target.value)}
+                placeholder="e.g. Reach Truck"
+                style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 14, boxSizing: "border-box" }} />
+              <datalist id="subcats-new">
+                {(CATEGORY_SUBCATEGORIES[form.category] || []).map(s => <option key={s} value={s} />)}
+              </datalist>
+            </div>
             <Sel label={t(lang,"site")} value={form.location} onChange={f("location")} options={sites} />
             <Input label={t(lang,"owner")} value={form.owner} onChange={f("owner")} placeholder="e.g. EPx Logistics" />
             <div>
@@ -3310,11 +3347,15 @@ const filtered = assets.filter(a =>
             {filtered.map(a => (
               <div key={a.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, borderTop: `3px solid ${statusColor(a.status)}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                  <div style={{ flex: 1, marginRight: 8 }}><div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{a.name}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.category}</div></div>
+                  <div style={{ flex: 1, marginRight: 8 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{a.name}</div>
+                    {a.asset_code && <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, fontFamily: "monospace", marginTop: 2 }}>{a.asset_code}</div>}
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.category}{a.subcategory?` · ${a.subcategory}`:""}</div>
+                  </div>
                   <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, marginBottom: 14 }}>
-                  {[[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"brand"),a.brand||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"],[t(lang,"invoiceNumber"),a.invoice_number||"—"],[t(lang,"poNumber"),a.po_number||"—"],[t(lang,"purchaseDate"),a.purchase_date?fmtDate(a.purchase_date):"—"]].map(([lbl,val]) => (
+                  {[[t(lang,"assetCode"),a.asset_code||"—"],[t(lang,"subcategory"),a.subcategory||"—"],[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"brand"),a.brand||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"],[t(lang,"invoiceNumber"),a.invoice_number||"—"],[t(lang,"poNumber"),a.po_number||"—"],[t(lang,"purchaseDate"),a.purchase_date?fmtDate(a.purchase_date):"—"]].map(([lbl,val]) => (
                     <div key={lbl}><div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase" }}>{lbl}</div><div style={{ color: C.subtle, marginTop: 2 }}>{val||"—"}</div></div>
                   ))}
                 </div>
@@ -4079,7 +4120,7 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
     const wb = XLSX.utils.book_new();
     const woData = workOrders.map(wo => ({ "ID": wo.id, "Title": wo.title, "Asset": wo.asset, "Priority": wo.priority, "Status": wo.status, "Vendor": wo.vendor||"—", "Start Date": wo.start_date||"—", "Due Date": wo.due||"—" }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(woData), "Work Orders");
-    const assetData = assets.map(a => ({ "ID": a.id, "Name": a.name, "Category": a.category, "Site": a.location, "Status": a.status, "Value": a.value||"—", "PM Frequency": a.pm_frequency||"—", "Last PM": a.last_pm_date||"Never", "Next Service": a.next_service||"—" }));
+    const assetData = assets.map(a => ({ "ID": a.id, "Asset Code": a.asset_code||"—", "Name": a.name, "Category": a.category, "Subcategory": a.subcategory||"—", "Site": a.location, "Status": a.status, "Value": a.value||"—", "PM Frequency": a.pm_frequency||"—", "Last PM": a.last_pm_date||"Never", "Next Service": a.next_service||"—" }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(assetData), "Assets");
     const vendorData = vendors.map(v => ({ "Name": v.name, "Specialty": v.specialty||"—", "Contact": v.contact||"—", "Phone": v.phone||"—", "Email": v.email||"—", "Status": v.status, "Rating": v.rating||"N/A", "Open Orders": v.open_orders||0 }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vendorData), "Vendors");
@@ -4099,7 +4140,7 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
     doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Work Orders",14,20);
     doc.autoTable({ startY: 24, head: [["Title","Asset","Priority","Status","Vendor","Due"]], body: workOrders.slice(0,50).map(wo => [wo.title,wo.asset,wo.priority,wo.status,wo.vendor||"—",wo.due||"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
     doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Assets",14,20);
-    doc.autoTable({ startY: 24, head: [["Name","Category","Site","Status","PM Every","Last PM"]], body: assets.slice(0,50).map(a => [a.name,a.category||"—",a.location,a.status,a.pm_frequency?`${a.pm_frequency} mo.`:"—",a.last_pm_date?fmtDate(a.last_pm_date):"Never"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
+    doc.autoTable({ startY: 24, head: [["Code","Name","Category","Site","Status","PM Every","Last PM"]], body: assets.slice(0,50).map(a => [a.asset_code||"—",a.name,a.category||"—",a.location,a.status,a.pm_frequency?`${a.pm_frequency} mo.`:"—",a.last_pm_date?fmtDate(a.last_pm_date):"Never"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
     doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Vendors",14,20);
     doc.autoTable({ startY: 24, head: [["Name","Specialty","Contact","Phone","Status","Open Orders","Rating"]], body: vendors.map(v => [v.name,v.specialty||"—",v.contact||"—",v.phone||"—",v.status,v.open_orders||0,v.rating>0?v.rating.toFixed(1):"N/A"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
     doc.save(`Facility_Report_${TODAY}.pdf`);
