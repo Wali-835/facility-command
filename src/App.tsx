@@ -1485,9 +1485,9 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                                           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, minWidth: 150 }}>
                                             <input value={finalCostInputs[part.id] ?? part.unit_cost ?? ""} onChange={e => setFinalCostInputs(prev => ({ ...prev, [part.id]: e.target.value }))} type="number" placeholder={t(lang,"unitCostLabel")}
                                               style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }} />
-                                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
                                               {part.asset_part_id && (
-                                                <Btn small onClick={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Stock")} disabled={saving} color={C.green}>✓ {t(lang,"useStock")}</Btn>
+                                                <PasswordConfirm lang={lang} actionLabel={`✓ ${t(lang,"useStock")}`} color={C.green} disabled={saving} onConfirmed={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Stock")} />
                                               )}
                                               <Btn small onClick={() => approvePart(part, log.id, finalCostInputs[part.id] ?? part.unit_cost, "Order")} disabled={saving} color={C.blue}>📦 {t(lang,"orderPart")}</Btn>
                                               <Btn small variant="danger" onClick={() => { setRejectingPart(part.id); setRejectReason(""); }}>✕ {t(lang,"reject")}</Btn>
@@ -1669,6 +1669,11 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
   const [assignee, setAssignee] = useState(wo.assignee || "");
   const [editingAssignee, setEditingAssignee] = useState(false);
   const [savingAssignee, setSavingAssignee] = useState(false);
+  const [poNumber, setPoNumber] = useState(wo.po_number || "");
+  const [poAmount, setPoAmount] = useState(wo.po_amount ?? "");
+  const [poStatus, setPoStatus] = useState(wo.po_status || "Requested");
+  const [editingPO, setEditingPO] = useState(false);
+  const [savingPO, setSavingPO] = useState(false);
   const [rejectingPart, setRejectingPart] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [finalCostInputs, setFinalCostInputs] = useState({});
@@ -1726,6 +1731,13 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
     const { error: err } = await supabase.from("work_orders").update({ action_plan: actionPlan||null, target_date: targetDate||null }).eq("id", wo.id);
     if (err) { setError(err.message); } else { setEditingPlan(false); }
     setSavingPlan(false);
+  };
+
+  const savePO = async () => {
+    setSavingPO(true); setError(null);
+    const { error: err } = await supabase.from("work_orders").update({ po_number: poNumber||null, po_amount: poAmount!==""?parseFloat(poAmount):null, po_status: poStatus||null }).eq("id", wo.id);
+    if (err) { setError(err.message); } else { setEditingPO(false); }
+    setSavingPO(false);
   };
 
   const saveAssignee = async () => {
@@ -1917,6 +1929,40 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
               </div>
             ) : (
               <div style={{ fontSize: 13, color: assignee?C.subtle:C.muted, marginTop: 8 }}>{assignee || t(lang,"unassigned")}</div>
+            )}
+          </div>
+
+          {/* Purchase Order (repair via vendor/external) */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: editingPO?12:0 }}>
+              <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>🧾 {t(lang,"poNumber")}</div>
+              {isMaintenance && !editingPO && (
+                <button onClick={() => setEditingPO(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12 }}>{t(lang,"edit")}</button>
+              )}
+            </div>
+            {editingPO ? (
+              <div>
+                <Input label={t(lang,"poNumber")} value={poNumber} onChange={setPoNumber} />
+                <div style={{ marginTop: 10 }}>
+                  <Input label={t(lang,"poAmount")} value={poAmount} onChange={setPoAmount} type="number" />
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>{t(lang,"poStatus")}</div>
+                  <select value={poStatus} onChange={e => setPoStatus(e.target.value)} style={{ width: "100%", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px", color: C.text, fontSize: 13 }}>
+                    <option value="Requested">{t(lang,"poRequested")}</option>
+                    <option value="Issued">{t(lang,"poIssued")}</option>
+                    <option value="Received">{t(lang,"poReceived")}</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <Btn small onClick={savePO} disabled={savingPO}>{savingPO?t(lang,"saving"):t(lang,"save")}</Btn>
+                  <Btn small variant="secondary" onClick={() => { setPoNumber(wo.po_number||""); setPoAmount(wo.po_amount??""); setPoStatus(wo.po_status||"Requested"); setEditingPO(false); }}>{t(lang,"cancel")}</Btn>
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: poNumber?C.subtle:C.muted, marginTop: 8 }}>
+                {poNumber ? `${poNumber} · $${poAmount||0} · ${t(lang,poStatus==="Issued"?"poIssued":poStatus==="Received"?"poReceived":"poRequested")}` : "—"}
+              </div>
             )}
           </div>
 
@@ -4115,7 +4161,7 @@ function MaintenanceCalendar({ workOrders, assets, lang }) {
   );
 }
 
-function Reports({ workOrders, assets, vendors, lang, issues }) {
+function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
     const woData = workOrders.map(wo => ({ "ID": wo.id, "Title": wo.title, "Asset": wo.asset, "Priority": wo.priority, "Status": wo.status, "Vendor": wo.vendor||"—", "Start Date": wo.start_date||"—", "Due Date": wo.due||"—" }));
@@ -4144,6 +4190,46 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
     doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Vendors",14,20);
     doc.autoTable({ startY: 24, head: [["Name","Specialty","Contact","Phone","Status","Open Orders","Rating"]], body: vendors.map(v => [v.name,v.specialty||"—",v.contact||"—",v.phone||"—",v.status,v.open_orders||0,v.rating>0?v.rating.toFixed(1):"N/A"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
     doc.save(`Facility_Report_${TODAY}.pdf`);
+  };
+
+  const [reportSite, setReportSite] = useState("All"); const [reportCategory, setReportCategory] = useState("All"); const [sendingReport, setSendingReport] = useState(false); const [reportMsg, setReportMsg] = useState(null);
+
+  const sendFilteredReport = async () => {
+    setSendingReport(true); setReportMsg(null);
+    try {
+      const filteredWOs = workOrders.filter(w => (reportSite==="All"||assets.find(a=>a.name===w.asset)?.location===reportSite) && (reportCategory==="All"||assets.find(a=>a.name===w.asset)?.category===reportCategory));
+      const filteredAssets = assets.filter(a => (reportSite==="All"||a.location===reportSite) && (reportCategory==="All"||a.category===reportCategory));
+      applyPlugin(jsPDF);
+      const doc = new jsPDF();
+      doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text(`Filtered Report — Site: ${reportSite} · Category: ${reportCategory}`,14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}`,14,26);
+      doc.setTextColor(0,0,0); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Work Orders",14,40);
+      doc.autoTable({ startY: 44, head: [["Title","Asset","Priority","Status","Vendor","Due"]], body: filteredWOs.slice(0,80).map(wo => [wo.title,wo.asset,wo.priority,wo.status,wo.vendor||"—",wo.due||"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
+      doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Assets",14,20);
+      doc.autoTable({ startY: 24, head: [["Code","Name","Category","Site","Status"]], body: filteredAssets.slice(0,80).map(a => [a.asset_code||"—",a.name,a.category||"—",a.location,a.status]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
+
+      const dataUri = doc.output("datauristring");
+      const base64 = dataUri.split(",")[1];
+      const filename = `Facility_Report_${reportSite}_${reportCategory}_${TODAY}.pdf`.replace(/\s+/g,"_");
+
+      const { data: recipients } = await supabase.from("user_roles").select("name,email,role,supervised_sites,supervised_categories").in("role", ["supervisor","engineer","admin"]);
+      const to = [...new Set((recipients||[]).filter(r => r.email
+        && (!r.supervised_sites || reportSite==="All" || r.supervised_sites.includes(reportSite))
+        && (!r.supervised_categories || reportCategory==="All" || r.supervised_categories.includes(reportCategory))
+      ).map(r => r.email))];
+
+      if (to.length===0) { setReportMsg({ ok: false, text: t(lang,"noRecipientsFound") }); setSendingReport(false); return; }
+
+      const res = await fetch("https://evwsdzqgvrwbjusjmrdc.supabase.co/functions/v1/send-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ to, subject: `Facility Command Report — ${reportSite} / ${reportCategory}`, filename, base64, mimeType: "application/pdf", message: `Filtered report for Site: ${reportSite}, Category: ${reportCategory}.` }),
+      });
+      if (!res.ok) { setReportMsg({ ok: false, text: t(lang,"reportSendFailed") }); }
+      else { setReportMsg({ ok: true, text: `${t(lang,"reportSentTo")} ${to.length}` }); }
+    } catch (e) {
+      setReportMsg({ ok: false, text: t(lang,"reportSendFailed") });
+    }
+    setSendingReport(false);
   };
 
   const [period, setPeriod] = useState("month"); const [breakdowns, setBreakdowns] = useState([]); const [logs, setLogs] = useState([]); const [loading, setLoading] = useState(true);
@@ -4211,6 +4297,27 @@ function Reports({ workOrders, assets, vendors, lang, issues }) {
         <div style={{ display: "flex", gap: 6 }}>
           {["month","quarter","half","all"].map(val => <button key={val} onClick={() => setPeriod(val)} style={{ background: period===val?C.accent:C.card, color: period===val?"#fff":C.muted, border: `1px solid ${period===val?C.accent:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>{periodLabels[val]}</button>)}
         </div>
+      </div>
+
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 24, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>{t(lang,"fromSite")}</div>
+          <select value={reportSite} onChange={e => setReportSite(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+            <option value="All">{t(lang,"all")||"All"}</option>
+            {(sites||[]).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>{t(lang,"category")}</div>
+          <select value={reportCategory} onChange={e => setReportCategory(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+            <option value="All">{t(lang,"all")||"All"}</option>
+            {WO_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <button onClick={sendFilteredReport} disabled={sendingReport} style={{ background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: sendingReport?"default":"pointer" }}>
+          {sendingReport ? t(lang,"sending") : `✉️ ${t(lang,"emailFilteredReport")}`}
+        </button>
+        {reportMsg && <div style={{ fontSize: 12, fontWeight: 600, color: reportMsg.ok?C.green:C.red }}>{reportMsg.text}</div>}
       </div>
 
       {loading ? <Spinner lang={lang} /> : (
@@ -4308,11 +4415,41 @@ function PartsCatalogMgmt({ lang }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ part_name: "", part_number: "", supplier: "", unit_cost: "", notes: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+  const [users, setUsers] = useState([]);
+  const [categoryResp, setCategoryResp] = useState([]);
+  const [editingModelResp, setEditingModelResp] = useState(false);
+  const [modelRespName, setModelRespName] = useState("");
+  const [editingCatResp, setEditingCatResp] = useState(null);
+  const [catRespName, setCatRespName] = useState("");
 
   useEffect(() => {
-    supabase.from("mhe_models").select("id, brand, model, category, subcategory").order("brand").order("model")
+    supabase.from("mhe_models").select("id, brand, model, category, subcategory, responsible_name, responsible_email").order("brand").order("model")
       .then(({ data }) => setModels(data || []));
+    supabase.from("user_roles").select("name,email,role").in("role", ["maintenance","engineer","supervisor","admin"]).order("name")
+      .then(({ data }) => setUsers(data || []));
+    supabase.from("category_responsibility").select("*")
+      .then(({ data }) => setCategoryResp(data || []));
   }, []);
+
+  const saveModelResponsible = async (name) => {
+    if (!selectedModel) return;
+    const u = users.find(x => x.name === name);
+    const { error: err } = await supabase.from("mhe_models").update({ responsible_name: name||null, responsible_email: u?.email||null }).eq("id", selectedModel.id);
+    if (err) { setError(err.message); return; }
+    setModels(prev => prev.map(m => m.id===selectedModel.id ? { ...m, responsible_name: name||null, responsible_email: u?.email||null } : m));
+    setSelectedModel(prev => ({ ...prev, responsible_name: name||null, responsible_email: u?.email||null }));
+    setEditingModelResp(false);
+  };
+
+  const saveCategoryResponsible = async (category, name) => {
+    const u = users.find(x => x.name === name);
+    const existing = categoryResp.find(c => c.category === category);
+    const record = { id: existing?.id || uid("CRSP"), category, responsible_name: name||null, responsible_email: u?.email||null };
+    const { error: err } = await supabase.from("category_responsibility").upsert([record], { onConflict: "category" });
+    if (err) { setError(err.message); return; }
+    setCategoryResp(prev => existing ? prev.map(c => c.category===category?record:c) : [...prev, record]);
+    setEditingCatResp(null);
+  };
 
   useEffect(() => {
     if (selectedModel) loadParts();
@@ -4395,6 +4532,34 @@ function PartsCatalogMgmt({ lang }) {
         📋 {t(lang,"excelFormat")}
       </div>
 
+      {/* Category responsibility */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 12 }}>👤 {t(lang,"categoryResponsibility")}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+          {WO_CATEGORIES.map(cat => {
+            const resp = categoryResp.find(c => c.category === cat);
+            return (
+              <div key={cat} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 4 }}>{CATEGORY_ICONS[cat]||"🔧"} {cat}</div>
+                {editingCatResp===cat ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <select value={catRespName} onChange={e => setCatRespName(e.target.value)} style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }}>
+                      <option value="">{t(lang,"unassigned")}</option>
+                      {users.map(u => <option key={u.name} value={u.name}>{u.name}</option>)}
+                    </select>
+                    <Btn small onClick={() => saveCategoryResponsible(cat, catRespName)}>{t(lang,"save")}</Btn>
+                  </div>
+                ) : (
+                  <div onClick={() => { setEditingCatResp(cat); setCatRespName(resp?.responsible_name||""); }} style={{ fontSize: 12, color: resp?.responsible_name?C.accent:C.muted, cursor: "pointer" }}>
+                    {resp?.responsible_name || t(lang,"unassigned")} ✏️
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20, alignItems: "start" }}>
         {/* Model List */}
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
@@ -4432,6 +4597,19 @@ function PartsCatalogMgmt({ lang }) {
                 <div>
                   <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{selectedModel.brand} {selectedModel.model}</div>
                   <div style={{ fontSize: 12, color: C.muted }}>{selectedModel.subcategory} · {parts.length} {t(lang,"partsCount")}</div>
+                  {editingModelResp ? (
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <select value={modelRespName} onChange={e => setModelRespName(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }}>
+                        <option value="">{t(lang,"unassigned")}</option>
+                        {users.map(u => <option key={u.name} value={u.name}>{u.name}</option>)}
+                      </select>
+                      <Btn small onClick={() => saveModelResponsible(modelRespName)}>{t(lang,"save")}</Btn>
+                    </div>
+                  ) : (
+                    <div onClick={() => { setEditingModelResp(true); setModelRespName(selectedModel.responsible_name||""); }} style={{ fontSize: 12, color: selectedModel.responsible_name?C.accent:C.muted, cursor: "pointer", marginTop: 4 }}>
+                      👤 {t(lang,"responsibleUser")}: {selectedModel.responsible_name || t(lang,"unassigned")} ✏️
+                    </div>
+                  )}
                 </div>
                 <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addPartToModel")}</Btn>
               </div>
@@ -5104,7 +5282,7 @@ export default function App() {
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
         {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} sites={siteNames} />}
-        {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} isSupervisor={isSupervisor} />}
+        {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} isSupervisor={isSupervisor} sites={siteNames} />}
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
         {activeTab===t(lang,"partsCatalogMgmt") && isAdmin && <PartsCatalogMgmt lang={lang} />}
         {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} sites={siteNames} />}
