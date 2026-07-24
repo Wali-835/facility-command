@@ -2514,12 +2514,15 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
 }
 const TICKET_STATUSES = ["Open","In Progress","Resolved","Closed"];
 
-function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRole }) {
+function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor, technicians, vendors, workOrders, setWorkOrders, lang, userRole }) {
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [comment, setComment] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [assigning, setAssigning] = useState(false);
+  const [assignTech, setAssignTech] = useState(ticket.assignee || "— Unassigned —");
+  const [assignVendor, setAssignVendor] = useState(ticket.vendor || "— None —");
 
   useEffect(() => { loadEvents(); }, []);
   const loadEvents = async () => {
@@ -2529,12 +2532,17 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRol
     setLoadingEvents(false);
   };
 
+  const logEvent = async (event_type, note) => {
+    const entry = { id: uid("TEV"), ticket_id: ticket.id, event_type, note, by: userRole?.name || "—", department: userRole?.department || null };
+    await supabase.from("ticket_events").insert([entry]);
+    setEvents(prev => [...prev, entry]);
+  };
+
   const addComment = async () => {
     if (!comment.trim()) return;
     setSaving(true); setError(null);
-    const entry = { id: uid("TEV"), ticket_id: ticket.id, event_type: "comment", note: comment.trim(), by: userRole?.name || "—" };
-    const { error: err } = await supabase.from("ticket_events").insert([entry]);
-    if (err) { setError(err.message); } else { setEvents(prev => [...prev, entry]); setComment(""); }
+    await logEvent("comment", comment.trim());
+    setComment("");
     setSaving(false);
   };
 
@@ -2543,12 +2551,44 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRol
     setSaving(true); setError(null);
     const { error: err } = await supabase.from("tickets").update({ status: newStatus }).eq("id", ticket.id);
     if (err) { setError(err.message); setSaving(false); return; }
-    const entry = { id: uid("TEV"), ticket_id: ticket.id, event_type: "status_change", note: `${ticket.status} → ${newStatus}`, by: userRole?.name || "—" };
-    await supabase.from("ticket_events").insert([entry]);
-    setEvents(prev => [...prev, entry]);
+    await logEvent("status_change", `${ticket.status} → ${newStatus}`);
     onUpdated({ ...ticket, status: newStatus });
     setSaving(false);
   };
+
+  const saveAssignment = async () => {
+    setSaving(true); setError(null);
+    const assignee = assignTech === "— Unassigned —" ? null : assignTech;
+    const vendor = assignVendor === "— None —" ? null : assignVendor;
+    const { error: err } = await supabase.from("tickets").update({ assignee, vendor }).eq("id", ticket.id);
+    if (err) { setError(err.message); setSaving(false); return; }
+    const parts = [];
+    if (assignee) parts.push(`${t(lang,"assignee")}: ${assignee}`);
+    if (vendor) parts.push(`${t(lang,"vendor")}: ${vendor}`);
+    await logEvent("assignment", parts.length ? parts.join(" · ") : t(lang,"unassigned"));
+    if (assignee && assignee !== ticket.assignee) await notifyAssignee(assignee, `${t(lang,"assignedToTicket")}: ${ticket.title} (${ticket.id})`, ticket.id);
+    onUpdated({ ...ticket, assignee, vendor });
+    setAssigning(false);
+    setSaving(false);
+  };
+
+  const convertToWorkOrder = async () => {
+    setSaving(true); setError(null);
+    const woId = uid("WO");
+    const newWO = { id: woId, title: `${t(lang,"tickets")} — ${ticket.title}`, asset: ticket.asset_name || ticket.title, asset_id: ticket.asset_id || null, category: ticket.category || null, priority: ticket.priority || "Medium", status: "Open", assignee: ticket.assignee || null, start_date: TODAY, due: null, vendor: ticket.vendor || null, site: ticket.site || null };
+    const { error: err } = await supabase.from("work_orders").insert([newWO]);
+    if (err) { setError(err.message); setSaving(false); return; }
+    const { error: linkErr } = await supabase.from("tickets").update({ work_order_id: woId, status: "In Progress" }).eq("id", ticket.id);
+    if (linkErr) { setError(linkErr.message); setSaving(false); return; }
+    if (setWorkOrders) setWorkOrders(prev => [newWO, ...prev]);
+    await logEvent("status_change", `${t(lang,"linkedWorkOrder")}: ${woId}`);
+    if (ticket.assignee) await notifyAssignee(ticket.assignee, `${t(lang,"assignedToWO")}: ${newWO.title} (${woId})`, woId);
+    onUpdated({ ...ticket, work_order_id: woId, status: "In Progress" });
+    setSaving(false);
+  };
+
+  const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
+  const vendorOptions = ["— None —", ...(vendors||[]).filter(v => v.status==="Active").map(v => v.name)];
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
@@ -2556,7 +2596,7 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRol
         <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{ticket.title}</div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{ticket.category||"—"} · {ticket.site||"—"}{ticket.asset_name?` · ${ticket.asset_name}`:""}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{ticket.category||"—"} · {ticket.site||"—"}{ticket.location_detail?` · 📍 ${ticket.location_detail}`:""}{ticket.asset_name?` · ${ticket.asset_name}`:""}</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
         </div>
@@ -2567,8 +2607,36 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRol
             <span>{t(lang,"requestedBy")}: <strong style={{ color: C.text }}>{ticket.requested_by||"—"}</strong></span>
             <span>{t(lang,"priority")}: <strong style={{ color: C.text }}>{ticket.priority}</strong></span>
             {ticket.assignee && <span>{t(lang,"assignee")}: <strong style={{ color: C.text }}>{ticket.assignee}</strong></span>}
+            {ticket.vendor && <span>{t(lang,"vendor")}: <strong style={{ color: C.text }}>{ticket.vendor}</strong></span>}
             {ticket.work_order_id && <span>{t(lang,"linkedWorkOrder")}: <strong style={{ color: C.text, fontFamily: "monospace" }}>{ticket.work_order_id}</strong></span>}
           </div>
+          {isSupervisor && (
+            <div style={{ marginBottom: 20, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: assigning?12:0 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>{t(lang,"assignTicket")}</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {!assigning && <button onClick={() => setAssigning(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12 }}>{t(lang,"edit")}</button>}
+                  {!ticket.work_order_id && <Btn small onClick={convertToWorkOrder} disabled={saving}>🔧 {t(lang,"convertToWO")}</Btn>}
+                </div>
+              </div>
+              {assigning ? (
+                <div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Sel label={t(lang,"assignee")} value={assignTech} onChange={setAssignTech} options={technicianOptions} />
+                    <Sel label={t(lang,"vendor")} value={assignVendor} onChange={setAssignVendor} options={vendorOptions} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <Btn small onClick={saveAssignment} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
+                    <Btn small variant="secondary" onClick={() => { setAssigning(false); setAssignTech(ticket.assignee||"— Unassigned —"); setAssignVendor(ticket.vendor||"— None —"); }}>{t(lang,"cancel")}</Btn>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: (ticket.assignee||ticket.vendor)?C.subtle:C.muted, marginTop: 6 }}>
+                  {ticket.assignee || ticket.vendor ? [ticket.assignee, ticket.vendor].filter(Boolean).join(" · ") : t(lang,"unassigned")}
+                </div>
+              )}
+            </div>
+          )}
           {isMaintenance && (
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"status")}</div>
@@ -2585,7 +2653,7 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRol
               {events.length===0 && <div style={{ fontSize: 12, color: C.muted }}>—</div>}
               {events.map(ev => (
                 <div key={ev.id} style={{ fontSize: 12, color: C.subtle, background: C.surface, borderRadius: 8, padding: "8px 12px" }}>
-                  <div><span style={{ color: C.text, fontWeight: 600 }}>{ev.by}</span> · <span style={{ color: C.muted }}>{fmtDateTime(ev.at)}</span>{ev.event_type==="status_change" && <span style={{ color: C.accent }}> · {t(lang,"status")}</span>}</div>
+                  <div><span style={{ color: C.text, fontWeight: 600 }}>{ev.by}{ev.department?` (${ev.department})`:""}</span> · <span style={{ color: C.muted }}>{fmtDateTime(ev.at)}</span>{ev.event_type==="status_change" && <span style={{ color: C.accent }}> · {t(lang,"status")}</span>}{ev.event_type==="assignment" && <span style={{ color: C.blue }}> · {t(lang,"assignTicket")}</span>}</div>
                   {ev.note && <div style={{ marginTop: 2 }}>{ev.note}</div>}
                 </div>
               ))}
@@ -2602,7 +2670,7 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, lang, userRol
   );
 }
 
-function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, assets, workOrders, lang, sites }) {
+function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, assets, workOrders, setWorkOrders, vendors, lang, sites }) {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -2610,31 +2678,44 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState(null);
   const [statusFilter, setStatusFilter] = useState("Open");
-  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "" });
+  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
+  const [layouts, setLayouts] = useState([]);
+  const [layoutPoints, setLayoutPoints] = useState([]);
 
-  useEffect(() => { loadTickets(); }, []);
+  useEffect(() => { loadTickets(); loadLayouts(); }, []);
   const loadTickets = async () => {
     setLoading(true);
     const { data, error: err } = await supabase.from("tickets").select("*").order("requested_at", { ascending: false });
     if (err) setError(err.message); else setTickets(data || []);
     setLoading(false);
   };
+  const loadLayouts = async () => {
+    const [lRes, pRes] = await Promise.all([
+      supabase.from("site_layouts").select("*"),
+      supabase.from("site_layout_points").select("*"),
+    ]);
+    setLayouts(lRes.data || []);
+    setLayoutPoints(pRes.data || []);
+  };
 
   const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
   const assetOptions = ["— None —", ...(assets||[]).map(a => a.name)];
   const woOptions = ["— None —", ...(workOrders||[]).filter(w => w.status !== "Completed").map(w => w.id)];
+  const activeLayout = layouts.find(l => l.site === form.site);
+  const activeLayoutPoints = activeLayout ? layoutPoints.filter(p => p.site_layout_id === activeLayout.id) : [];
+  const layoutImageUrl = activeLayout ? supabase.storage.from("asset-documents").getPublicUrl(activeLayout.file_path).data.publicUrl : null;
 
   const submit = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
     const assetObj = (assets||[]).find(a => a.name === form.asset);
-    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
+    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, location_detail: form.location_detail||null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
     const { error: err } = await supabase.from("tickets").insert([record]);
     if (err) { setError(err.message); setSaving(false); return; }
-    await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: form.description||null, by: userRole?.name||"—" }]);
+    await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: form.description||null, by: userRole?.name||"—", department: userRole?.department||null }]);
     setTickets(prev => [record, ...prev]);
-    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "" });
+    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "" });
     setShowForm(false);
     setSaving(false);
   };
@@ -2643,7 +2724,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
 
   return (
     <div>
-      {selected && <TicketDetail ticket={selected} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} isMaintenance={isMaintenance} lang={lang} userRole={userRole} />}
+      {selected && <TicketDetail ticket={selected} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} isMaintenance={isMaintenance} isSupervisor={isSupervisor} technicians={technicians} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} userRole={userRole} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
@@ -2660,10 +2741,30 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
             <Input label={t(lang,"title")} value={form.title} onChange={f("title")} />
             <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
-            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={f("site")} options={sites} />
+            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={v => { f("site")(v); f("location_detail")(""); }} options={sites} />
             <Sel label={t(lang,"linkedAssetOptional")} value={form.asset||"— None —"} onChange={f("asset")} options={assetOptions} />
             <Sel label={t(lang,"linkedWorkOrderOptional")} value={form.work_order_id||"— None —"} onChange={f("work_order_id")} options={woOptions} />
             {isMaintenance && <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"specificLocation")}</div>
+            {activeLayout ? (
+              <div>
+                <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                  <img src={layoutImageUrl} alt={activeLayout.site} style={{ display: "block", maxWidth: "100%", maxHeight: 360 }} />
+                  {activeLayoutPoints.map(p => (
+                    <button key={p.id} type="button" onClick={() => f("location_detail")(p.label)}
+                      title={p.label}
+                      style={{ position: "absolute", left: `${p.x_pct}%`, top: `${p.y_pct}%`, transform: "translate(-50%,-50%)", width: 22, height: 22, borderRadius: "50%", border: `2px solid #fff`, background: form.location_detail===p.label?C.accent:C.red, cursor: "pointer", padding: 0 }} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, color: C.subtle, marginTop: 6 }}>
+                  📍 {form.location_detail || t(lang,"pickLocationOnMap")}
+                </div>
+              </div>
+            ) : (
+              <Input value={form.location_detail} onChange={f("location_detail")} placeholder={t(lang,"specificLocationPlaceholder")} />
+            )}
           </div>
           <div style={{ marginTop: 12 }}>
             <Textarea label={t(lang,"descriptionNotes")} value={form.description} onChange={f("description")} />
@@ -2681,7 +2782,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
             <div key={tk.id} onClick={() => setSelected(tk)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{tk.title}</div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{tk.category||"—"}{tk.site?` · ${tk.site}`:""}{tk.asset_name?` · ${tk.asset_name}`:""} · {fmtDateTime(tk.requested_at)}</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{tk.category||"—"}{tk.site?` · ${tk.site}`:""}{tk.location_detail?` · 📍 ${tk.location_detail}`:""}{tk.asset_name?` · ${tk.asset_name}`:""} · {fmtDateTime(tk.requested_at)}</div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Badge label={tk.priority} color={{Critical:C.red,High:C.accent,Medium:C.yellow,Low:C.muted}[tk.priority]||C.muted} />
@@ -5115,9 +5216,9 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors, onJumpToBr
 function UserManagement({ lang, sites }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const [identifierType, setIdentifierType] = useState("email"); // "email" | "phone"
-  const [form, setForm] = useState({ email: "", phone: "", password: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] });
+  const [form, setForm] = useState({ email: "", phone: "", password: "", name: "", role: "operations", site: "", department: "", supervised_sites: [], supervised_categories: [] });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
-  const resetForm = () => { setForm({ email: "", phone: "", password: "", name: "", role: "operations", site: "", supervised_sites: [], supervised_categories: [] }); setIdentifierType("email"); };
+  const resetForm = () => { setForm({ email: "", phone: "", password: "", name: "", role: "operations", site: "", department: "", supervised_sites: [], supervised_categories: [] }); setIdentifierType("email"); };
 
   useEffect(() => { loadUsers(); }, []);
   const loadUsers = async () => { setLoading(true); const { data } = await supabase.from("user_roles").select("*").order("name"); setUsers(data||[]); setLoading(false); };
@@ -5142,6 +5243,7 @@ function UserManagement({ lang, sites }) {
             email: identifierType === "email" ? form.email : null,
             phone: identifierType === "phone" ? form.phone : null,
             password: form.password, name: form.name, role: form.role, site: form.site || null,
+            department: form.department || null,
             supervised_sites: scopedSites, supervised_categories: scopedCategories,
           }),
         });
@@ -5154,9 +5256,9 @@ function UserManagement({ lang, sites }) {
       if (identifierType === "phone") {
         const existing = users.find(u => u.phone === form.phone);
         if (!existing) { setError(t(lang,"noAccountForPhone")); setSaving(false); return; }
-        record = { ...existing, name: form.name, role: form.role, site: form.site||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+        record = { ...existing, name: form.name, role: form.role, site: form.site||null, department: form.department||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
       } else {
-        record = { id: uid("USR"), email: form.email, phone: form.phone||null, name: form.name, role: form.role, site: form.site||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+        record = { id: uid("USR"), email: form.email, phone: form.phone||null, name: form.name, role: form.role, site: form.site||null, department: form.department||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
       }
       const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
       if (err) { setError(err.message); setSaving(false); return; }
@@ -5165,8 +5267,8 @@ function UserManagement({ lang, sites }) {
     setSaving(false);
   };
   const deleteUser = async (id) => { await supabase.from("user_roles").delete().eq("id",id); setUsers(prev => prev.filter(u => u.id!==id)); };
-  const roleColor = (r) => ({ admin: C.accent, maintenance: C.blue, engineer: C.purple, supervisor: C.purple, operations: C.green }[r]||C.muted);
-  const roleIcon = (r) => ({ admin: "★", maintenance: "🔧", engineer: "🛠", supervisor: "👁", operations: "🏭" }[r]||"👤");
+  const roleColor = (r) => ({ admin: C.accent, maintenance: C.blue, engineer: C.purple, supervisor: C.purple, operations: C.green, requester: C.yellow }[r]||C.muted);
+  const roleIcon = (r) => ({ admin: "★", maintenance: "🔧", engineer: "🛠", supervisor: "👁", operations: "🏭", requester: "🧑‍💼" }[r]||"👤");
 
   return (
     <div>
@@ -5180,7 +5282,7 @@ function UserManagement({ lang, sites }) {
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addUser")}</Btn>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 24 }}>
-        {[["🏭",t(lang,"operationsRole"),"operations",t(lang,"operationsDesc"),C.green],["🔧",t(lang,"maintenancePersonnelRole"),"maintenance",t(lang,"maintenancePersonnelDesc"),C.blue],["👁",t(lang,"supervisorRole"),"supervisor",t(lang,"supervisorDesc"),C.purple],["🛠",t(lang,"engineerRole"),"engineer",t(lang,"engineerDesc"),C.purple],["★",t(lang,"adminRole"),"admin",t(lang,"adminDesc"),C.accent]].map(([icon,title,role,desc,color]) => (
+        {[["🧑‍💼",t(lang,"requesterRole"),"requester",t(lang,"requesterDesc"),C.yellow],["🏭",t(lang,"operationsRole"),"operations",t(lang,"operationsDesc"),C.green],["🔧",t(lang,"maintenancePersonnelRole"),"maintenance",t(lang,"maintenancePersonnelDesc"),C.blue],["👁",t(lang,"supervisorRole"),"supervisor",t(lang,"supervisorDesc"),C.purple],["🛠",t(lang,"engineerRole"),"engineer",t(lang,"engineerDesc"),C.purple],["★",t(lang,"adminRole"),"admin",t(lang,"adminDesc"),C.accent]].map(([icon,title,role,desc,color]) => (
           <div key={role} style={{ background: C.card, border: `1px solid ${color}44`, borderRadius: 8, padding: 14 }}>
             <div style={{ fontSize: 18, marginBottom: 6 }}>{icon}</div>
             <div style={{ fontSize: 13, fontWeight: 700, color }}>{title}</div>
@@ -5206,8 +5308,9 @@ function UserManagement({ lang, sites }) {
               ? <Input label={t(lang,"phone")} value={form.phone} onChange={f("phone")} type="tel" placeholder="01012345678" />
               : <Input label={t(lang,"email")} value={form.email} onChange={f("email")} type="email" />}
             <Input label={t(lang,"fullName")} value={form.name} onChange={f("name")} />
-            <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["operations","maintenance","supervisor","engineer","admin"]} />
+            <Sel label={t(lang,"role")} value={form.role} onChange={f("role")} options={["requester","operations","maintenance","supervisor","engineer","admin"]} />
             <Sel label={t(lang,"defaultSite")} value={form.site||"— Select Site —"} onChange={f("site")} options={["— Select Site —",...sites.filter(s => s !== "— Select Site —")]} />
+            <Input label={t(lang,"department")} value={form.department} onChange={f("department")} placeholder={t(lang,"departmentPlaceholder")} />
           </div>
           <div style={{ marginTop: 12 }}>
             <Input label={t(lang,"password")} value={form.password} onChange={f("password")} type="password" />
@@ -5261,7 +5364,8 @@ function UserManagement({ lang, sites }) {
                 <div><div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{u.phone ? `📱 ${u.phone}` : u.email}</div></div>
                 <span style={{ background: roleColor(u.role)+"22", color: roleColor(u.role), border: `1px solid ${roleColor(u.role)}44`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>{roleIcon(u.role)} {u.role}</span>
               </div>
-              {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>📍 {u.site}</div>}
+              {u.site && <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>📍 {u.site}</div>}
+              {u.department && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>🏢 {u.department}</div>}
               {u.role === "supervisor" && (
                 <div style={{ fontSize: 11, color: C.purple, marginBottom: 12 }}>
                   {u.supervised_sites?.length ? `🏭 ${u.supervised_sites.join(", ")}` : `🏭 ${t(lang,"allSitesScope")}`}<br/>
@@ -5277,12 +5381,128 @@ function UserManagement({ lang, sites }) {
     </div>
   );
 }
-function SitesManagement({ sites, setSites, lang }) {
+function SiteLayoutModal({ site, onClose, lang, userRole }) {
+  const [layout, setLayout] = useState(null);
+  const [points, setPoints] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [pendingPoint, setPendingPoint] = useState(null);
+  const [pinLabel, setPinLabel] = useState("");
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    const { data: l } = await supabase.from("site_layouts").select("*").eq("site", site).maybeSingle();
+    setLayout(l || null);
+    if (l) {
+      const { data: p } = await supabase.from("site_layout_points").select("*").eq("site_layout_id", l.id);
+      setPoints(p || []);
+    } else setPoints([]);
+    setLoading(false);
+  };
+
+  const uploadImage = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setUploading(true); setError(null);
+    const layoutId = layout?.id || uid("LAY");
+    const path = `site-layouts/${site}/${Date.now()}-${file.name}`;
+    const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
+    if (upErr) { setError(upErr.message); setUploading(false); return; }
+    const record = { id: layoutId, site, file_name: file.name, file_path: path, uploaded_by: userRole?.name || null };
+    const { error: err } = await supabase.from("site_layouts").upsert([record], { onConflict: "site" });
+    if (err) { setError(err.message); setUploading(false); return; }
+    setLayout(record);
+    setUploading(false);
+  };
+
+  const imageUrl = layout ? supabase.storage.from("asset-documents").getPublicUrl(layout.file_path).data.publicUrl : null;
+
+  const handleImageClick = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x_pct = ((e.clientX - rect.left) / rect.width) * 100;
+    const y_pct = ((e.clientY - rect.top) / rect.height) * 100;
+    setPendingPoint({ x_pct, y_pct });
+    setPinLabel("");
+  };
+
+  const savePin = async () => {
+    if (!pinLabel.trim() || !pendingPoint || !layout) return;
+    const record = { id: uid("SLP"), site_layout_id: layout.id, label: pinLabel.trim(), x_pct: pendingPoint.x_pct, y_pct: pendingPoint.y_pct };
+    const { error: err } = await supabase.from("site_layout_points").insert([record]);
+    if (err) { setError(err.message); return; }
+    setPoints(prev => [...prev, record]);
+    setPendingPoint(null); setPinLabel("");
+  };
+
+  const deletePin = async (id) => {
+    await supabase.from("site_layout_points").delete().eq("id", id);
+    setPoints(prev => prev.filter(p => p.id !== id));
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 760, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>🗺 {t(lang,"siteLayout")} — {site}</div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          {loading ? <Spinner lang={lang} /> : (
+            <>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accent, color: "#fff", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: uploading?"not-allowed":"pointer", opacity: uploading?0.7:1, marginBottom: 16 }}>
+                {uploading ? "⏳..." : `📤 ${layout ? t(lang,"replaceLayout") : t(lang,"uploadLayout")}`}
+                <input type="file" accept="image/*" onChange={uploadImage} style={{ display: "none" }} disabled={uploading} />
+              </label>
+              {!layout ? (
+                <div style={{ textAlign: "center", padding: 32, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>{t(lang,"noLayoutYet")}</div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>{t(lang,"addPin")}</div>
+                  <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", cursor: "crosshair" }} onClick={handleImageClick}>
+                    <img src={imageUrl} alt={site} style={{ display: "block", maxWidth: "100%", maxHeight: 420, pointerEvents: "none" }} />
+                    {points.map(p => (
+                      <div key={p.id} title={p.label} style={{ position: "absolute", left: `${p.x_pct}%`, top: `${p.y_pct}%`, transform: "translate(-50%,-50%)", width: 22, height: 22, borderRadius: "50%", border: "2px solid #fff", background: C.red }} />
+                    ))}
+                    {pendingPoint && (
+                      <div style={{ position: "absolute", left: `${pendingPoint.x_pct}%`, top: `${pendingPoint.y_pct}%`, transform: "translate(-50%,-50%)", width: 22, height: 22, borderRadius: "50%", border: "2px solid #fff", background: C.accent }} />
+                    )}
+                  </div>
+                  {pendingPoint && (
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <input autoFocus value={pinLabel} onChange={e => setPinLabel(e.target.value)} placeholder={t(lang,"pinLabel")} onKeyDown={e => e.key==="Enter" && savePin()}
+                        style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px", color: C.text, fontSize: 13 }} />
+                      <Btn small onClick={savePin} disabled={!pinLabel.trim()}>{t(lang,"save")}</Btn>
+                      <Btn small variant="secondary" onClick={() => { setPendingPoint(null); setPinLabel(""); }}>{t(lang,"cancel")}</Btn>
+                    </div>
+                  )}
+                  {points.length>0 && (
+                    <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {points.map(p => (
+                        <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, background: C.surface, borderRadius: 6, padding: "4px 10px", fontSize: 12, color: C.subtle }}>
+                          📍 {p.label}
+                          <button onClick={() => deletePin(p.id)} title={t(lang,"deletePin")} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+function SitesManagement({ sites, setSites, lang, userRole }) {
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [renameId, setRenameId] = useState(null);
   const [renameValue, setRenameValue] = useState("");
+  const [layoutSite, setLayoutSite] = useState(null);
 
   const addSite = async () => {
     const name = newName.trim();
@@ -5309,6 +5529,7 @@ function SitesManagement({ sites, setSites, lang }) {
 
   return (
     <div>
+      {layoutSite && <SiteLayoutModal site={layoutSite} onClose={() => setLayoutSite(null)} lang={lang} userRole={userRole} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>{t(lang,"sitesManagement")}</div>
@@ -5346,6 +5567,7 @@ function SitesManagement({ sites, setSites, lang }) {
               <Btn small variant={s.active ? "danger" : "secondary"} onClick={() => toggleActive(s)}>
                 {s.active ? t(lang,"deactivate") : t(lang,"activate")}
               </Btn>
+              <Btn small variant="secondary" onClick={() => setLayoutSite(s.name)}>🗺 {t(lang,"siteLayout")}</Btn>
             </div>
           </div>
         ))}
@@ -5446,9 +5668,9 @@ export default function App() {
 
   const siteNames = sites.length ? ["— Select Site —", ...sites.filter(s => s.active).map(s => s.name)] : DEFAULT_SITES;
 
-  const roleColor = { admin: C.accent, maintenance: C.blue, engineer: C.purple, operations: C.green }[userRole.role] || C.muted;
-  const roleIcon = { admin: "★", maintenance: "🔧", engineer: "🛠", operations: "🏭" }[userRole.role] || "👤";
-  const roleLabel = { admin: t(lang,"adminRole"), maintenance: t(lang,"maintenancePersonnelRole"), engineer: t(lang,"engineerRole"), supervisor: t(lang,"supervisorRole"), operations: t(lang,"operationsRole") }[userRole.role] || userRole.role;
+  const roleColor = { admin: C.accent, maintenance: C.blue, engineer: C.purple, operations: C.green, requester: C.yellow }[userRole.role] || C.muted;
+  const roleIcon = { admin: "★", maintenance: "🔧", engineer: "🛠", operations: "🏭", requester: "🧑‍💼" }[userRole.role] || "👤";
+  const roleLabel = { admin: t(lang,"adminRole"), maintenance: t(lang,"maintenancePersonnelRole"), engineer: t(lang,"engineerRole"), supervisor: t(lang,"supervisorRole"), operations: t(lang,"operationsRole"), requester: t(lang,"requesterRole") }[userRole.role] || userRole.role;
 
   const tabs = [
     t(lang,"overview"),
@@ -5516,7 +5738,7 @@ export default function App() {
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
-        {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} setWorkOrders={setWorkOrders} vendors={vendors} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"insurance") && isEngineer && <InsuranceManagement assets={assets} isAdmin={isAdmin} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"purchaseOrders") && isEngineer && <PurchaseOrders assets={assets} isAdmin={isAdmin} lang={lang} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
@@ -5527,7 +5749,7 @@ export default function App() {
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
         {activeTab===t(lang,"partsCatalogMgmt") && isSupervisor && <PartsCatalogMgmt lang={lang} isAdmin={isAdmin} isSupervisor={isSupervisor} isEngineer={isEngineer} userRole={userRole} />}
         {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} sites={siteNames} />}
-        {activeTab===t(lang,"sitesManagement") && isAdmin && <SitesManagement sites={sites} setSites={setSites} lang={lang} />}
+        {activeTab===t(lang,"sitesManagement") && isAdmin && <SitesManagement sites={sites} setSites={setSites} lang={lang} userRole={userRole} />}
       </div>
     </div>
   );
