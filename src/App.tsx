@@ -7,6 +7,16 @@ import jsPDF from "jspdf";
 import { applyPlugin } from "jspdf-autotable";
 import { supabase } from "./supabase";
 
+// pdfjs-dist relies on Promise.withResolvers (ES2024), which older browsers
+// don't have yet — polyfill it so the PDF layout upload doesn't crash there.
+if (typeof Promise.withResolvers !== "function") {
+  Promise.withResolvers = function () {
+    let resolve, reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+}
+
 // Renders page 1 of a PDF file to a PNG Blob so it can be handled downstream
 // exactly like an uploaded image (pin placement, <img> rendering, etc.).
 // pdfjs-dist (~330KB) is loaded on demand, only when someone actually
@@ -2812,12 +2822,20 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
   const [selected, setSelected] = useState(null);
   const [statusFilter, setStatusFilter] = useState("Active");
   const [deptFilter, setDeptFilter] = useState("All");
-  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "" });
+  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "", departments: [] });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const [layouts, setLayouts] = useState([]);
   const [layoutPoints, setLayoutPoints] = useState([]);
   const [departmentOptions, setDepartmentOptions] = useState([]);
   const [photoFiles, setPhotoFiles] = useState([]);
+  const [customDept, setCustomDept] = useState("");
+  const toggleFormDept = (d) => setForm(p => ({ ...p, departments: p.departments.includes(d) ? p.departments.filter(x => x!==d) : [...p.departments, d] }));
+  const addCustomFormDept = () => {
+    const d = customDept.trim();
+    if (!d || form.departments.includes(d)) return;
+    setForm(p => ({ ...p, departments: [...p.departments, d] }));
+    setCustomDept("");
+  };
 
   useEffect(() => { loadTickets(); loadLayouts(); loadDepartments(); }, []);
   const loadTickets = async () => {
@@ -2850,7 +2868,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
     const assetObj = (assets||[]).find(a => a.name === form.asset);
-    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, location_detail: form.location_detail||null, target_date: form.target_date||null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
+    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, location_detail: form.location_detail||null, target_date: form.target_date||null, departments: form.departments.length?form.departments:null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
     const { error: err } = await supabase.from("tickets").insert([record]);
     if (err) { setError(err.message); setSaving(false); return; }
     await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: form.description||null, by: userRole?.name||"—", department: userRole?.department||null }]);
@@ -2860,8 +2878,8 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
       if (!upErr) await supabase.from("ticket_photos").insert([{ id: uid("TPH"), ticket_id: record.id, file_name: file.name, file_path: path, uploaded_by: userRole?.name||"—" }]);
     }
     setTickets(prev => [record, ...prev]);
-    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "" });
-    setPhotoFiles([]);
+    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "", departments: [] });
+    setPhotoFiles([]); setCustomDept("");
     setShowForm(false);
     setSaving(false);
   };
@@ -2904,6 +2922,26 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
             <Sel label={t(lang,"linkedWorkOrderOptional")} value={form.work_order_id||"— None —"} onChange={f("work_order_id")} options={woOptions} />
             {isMaintenance && <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />}
             {isSupervisor && <Input label={t(lang,"targetCompletion")} value={form.target_date} onChange={f("target_date")} type="date" />}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"departments")}</div>
+            {departmentOptions.length>0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                {departmentOptions.map(d => (
+                  <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.subtle, cursor: "pointer", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px" }}>
+                    <input type="checkbox" checked={form.departments.includes(d)} onChange={() => toggleFormDept(d)} /> {d}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              <input value={customDept} onChange={e => setCustomDept(e.target.value)} placeholder={t(lang,"departmentPlaceholder")} onKeyDown={e => e.key==="Enter" && (e.preventDefault(), addCustomFormDept())}
+                style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 12 }} />
+              <Btn small variant="secondary" onClick={addCustomFormDept}>+ {t(lang,"add")}</Btn>
+            </div>
+            {form.departments.length>0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+              {form.departments.map(d => <Badge key={d} label={d} color={C.purple} />)}
+            </div>}
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"specificLocation")}</div>
@@ -4854,6 +4892,10 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
   const [adjType, setAdjType] = useState("Add");
   const [adjQty, setAdjQty] = useState("");
   const [adjReason, setAdjReason] = useState("");
+  const [modelCatFilter, setModelCatFilter] = useState("All");
+  const [partSearch, setPartSearch] = useState("");
+  const [partSearchResults, setPartSearchResults] = useState(null);
+  const [searchingParts, setSearchingParts] = useState(false);
 
   useEffect(() => {
     supabase.from("mhe_models").select("id, brand, model, category, subcategory, responsible_name, responsible_email").order("brand").order("model")
@@ -4966,8 +5008,27 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
     reader.readAsBinaryString(file);
   };
 
-  // Group models by brand
-  const brandGroups = models.reduce((acc, m) => {
+  useEffect(() => {
+    const q = partSearch.trim();
+    if (!q) { setPartSearchResults(null); return; }
+    setSearchingParts(true);
+    const timer = setTimeout(async () => {
+      const { data } = await supabase.from("model_parts").select("*").or(`part_name.ilike.%${q}%,part_number.ilike.%${q}%`).order("part_name").limit(50);
+      setPartSearchResults(data || []);
+      setSearchingParts(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [partSearch]);
+
+  const jumpToPart = (part) => {
+    const model = models.find(m => m.id === part.model_id) || models.find(m => m.model === part.model);
+    if (model) setSelectedModel(model);
+    setPartSearch(""); setPartSearchResults(null);
+  };
+
+  // Group models by brand, optionally scoped to a category
+  const modelsInView = modelCatFilter==="All" ? models : models.filter(m => m.category===modelCatFilter);
+  const brandGroups = modelsInView.reduce((acc, m) => {
     if (!acc[m.brand]) acc[m.brand] = [];
     acc[m.brand].push(m);
     return acc;
@@ -5045,11 +5106,43 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
         </div>
       )}
 
+      {/* Global part search */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={partSearch} onChange={e => setPartSearch(e.target.value)} placeholder={t(lang,"searchPartsPlaceholder")}
+            style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 13 }} />
+        </div>
+        {partSearch.trim() && (
+          searchingParts ? <Spinner lang={lang} /> : (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+              {(partSearchResults||[]).length===0 ? (
+                <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"noPartsFound")}</div>
+              ) : partSearchResults.map(p => (
+                <div key={p.id} onClick={() => jumpToPart(p)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.surface, borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+                  <div>
+                    <span style={{ color: C.text, fontWeight: 600, fontSize: 13 }}>{p.part_name}</span>
+                    <span style={{ color: C.muted, fontSize: 12 }}> {p.part_number?`(${p.part_number})`:""} — {p.brand} {p.model}</span>
+                  </div>
+                  <Badge label={(p.stock_quantity||0)===0?t(lang,"outOfStock"):`${p.stock_quantity||0}`} color={(p.stock_quantity||0)===0?C.red:C.muted} />
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20, alignItems: "start" }}>
         {/* Model List */}
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700, color: C.text }}>📦 {t(lang,"selectModel")}</div>
+          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>📦 {t(lang,"selectModel")}</div>
+            <select value={modelCatFilter} onChange={e => setModelCatFilter(e.target.value)} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", color: C.text, fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
+              {WO_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
           <div style={{ maxHeight: 600, overflowY: "auto" }}>
+            {Object.keys(brandGroups).length===0 && <div style={{ padding: 16, fontSize: 12, color: C.muted, textAlign: "center" }}>{t(lang,"noModelsInCategory")}</div>}
             {Object.entries(brandGroups).map(([brand, brandModels]) => (
               <div key={brand}>
                 <div style={{ padding: "8px 16px", fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", background: C.surface, letterSpacing: "0.07em" }}>{brand}</div>
