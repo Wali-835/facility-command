@@ -7,6 +7,27 @@ import jsPDF from "jspdf";
 import { applyPlugin } from "jspdf-autotable";
 import { supabase } from "./supabase";
 
+// Renders page 1 of a PDF file to a PNG Blob so it can be handled downstream
+// exactly like an uploaded image (pin placement, <img> rendering, etc.).
+// pdfjs-dist (~330KB) is loaded on demand, only when someone actually
+// uploads a PDF, instead of bloating every page load with it.
+async function pdfFirstPageToPngBlob(file) {
+  const [pdfjsLib, { default: pdfjsWorkerUrl }] = await Promise.all([
+    import("pdfjs-dist"),
+    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+  ]);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
 const C = {
   bg: "#0d0f12", surface: "#141720", card: "#1a1e2a", border: "#252b3b",
   accent: "#f97316", yellow: "#eab308", green: "#22c55e", red: "#ef4444",
@@ -2528,14 +2549,36 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
   const [customDept, setCustomDept] = useState("");
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetDateVal, setTargetDateVal] = useState(ticket.target_date || "");
+  const [photos, setPhotos] = useState([]);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  useEffect(() => { loadEvents(); }, []);
+  useEffect(() => { loadEvents(); loadPhotos(); }, []);
   const loadEvents = async () => {
     setLoadingEvents(true);
     const { data } = await supabase.from("ticket_events").select("*").eq("ticket_id", ticket.id).order("at", { ascending: true });
     setEvents(data || []);
     setLoadingEvents(false);
   };
+  const loadPhotos = async () => {
+    const { data } = await supabase.from("ticket_photos").select("*").eq("ticket_id", ticket.id).order("uploaded_at", { ascending: false });
+    setPhotos(data || []);
+  };
+
+  const uploadPhotos = async (files) => {
+    setUploadingPhoto(true); setError(null);
+    for (const file of files) {
+      const path = `ticket-photos/${ticket.id}/${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
+      if (upErr) { setError(upErr.message); continue; }
+      const record = { id: uid("TPH"), ticket_id: ticket.id, file_name: file.name, file_path: path, uploaded_by: userRole?.name || "—" };
+      const { error: err } = await supabase.from("ticket_photos").insert([record]);
+      if (!err) setPhotos(prev => [record, ...prev]);
+    }
+    await logEvent("photo", t(lang,"photoAdded"));
+    setUploadingPhoto(false);
+  };
+
+  const photoUrl = (p) => supabase.storage.from("asset-documents").getPublicUrl(p.file_path).data.publicUrl;
 
   const logEvent = async (event_type, note) => {
     const entry = { id: uid("TEV"), ticket_id: ticket.id, event_type, note, by: userRole?.name || "—", department: userRole?.department || null };
@@ -2628,6 +2671,24 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
         <div style={{ padding: 24 }}>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
           {ticket.description && <div style={{ background: C.surface, borderRadius: 8, padding: 12, fontSize: 13, color: C.subtle, marginBottom: 16, whiteSpace: "pre-wrap" }}>{ticket.description}</div>}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>📷 {t(lang,"photos")}</div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.accent, cursor: uploadingPhoto?"not-allowed":"pointer", fontSize: 12, fontWeight: 700 }}>
+                {uploadingPhoto ? "⏳..." : `+ ${t(lang,"attachPhotos")}`}
+                <input type="file" accept="image/*" multiple onChange={e => e.target.files?.length && uploadPhotos([...e.target.files])} style={{ display: "none" }} disabled={uploadingPhoto} />
+              </label>
+            </div>
+            {photos.length>0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {photos.map(p => (
+                  <a key={p.id} href={photoUrl(p)} target="_blank" rel="noreferrer">
+                    <img src={photoUrl(p)} alt={p.file_name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}` }} />
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16, fontSize: 12, color: C.muted }}>
             <span>{t(lang,"requestedBy")}: <strong style={{ color: C.text }}>{ticket.requested_by||"—"}</strong></span>
             <span>{t(lang,"priority")}: <strong style={{ color: C.text }}>{ticket.priority}</strong></span>
@@ -2658,13 +2719,17 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
                   </div>
                   <div style={{ marginTop: 10 }}>
                     <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"departments")}</div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-                      {(departmentOptions||[]).map(d => (
-                        <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.subtle, cursor: "pointer", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px" }}>
-                          <input type="checkbox" checked={assignDepts.includes(d)} onChange={() => toggleDept(d)} /> {d}
-                        </label>
-                      ))}
-                    </div>
+                    {(departmentOptions||[]).length>0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                        {departmentOptions.map(d => (
+                          <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.subtle, cursor: "pointer", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px" }}>
+                            <input type="checkbox" checked={assignDepts.includes(d)} onChange={() => toggleDept(d)} /> {d}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{t(lang,"noDepartmentsYet")}</div>
+                    )}
                     <div style={{ display: "flex", gap: 6 }}>
                       <input value={customDept} onChange={e => setCustomDept(e.target.value)} placeholder={t(lang,"departmentPlaceholder")} onKeyDown={e => e.key==="Enter" && addCustomDept()}
                         style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 12 }} />
@@ -2752,6 +2817,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
   const [layouts, setLayouts] = useState([]);
   const [layoutPoints, setLayoutPoints] = useState([]);
   const [departmentOptions, setDepartmentOptions] = useState([]);
+  const [photoFiles, setPhotoFiles] = useState([]);
 
   useEffect(() => { loadTickets(); loadLayouts(); loadDepartments(); }, []);
   const loadTickets = async () => {
@@ -2788,8 +2854,14 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
     const { error: err } = await supabase.from("tickets").insert([record]);
     if (err) { setError(err.message); setSaving(false); return; }
     await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: form.description||null, by: userRole?.name||"—", department: userRole?.department||null }]);
+    for (const file of photoFiles) {
+      const path = `ticket-photos/${record.id}/${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
+      if (!upErr) await supabase.from("ticket_photos").insert([{ id: uid("TPH"), ticket_id: record.id, file_name: file.name, file_path: path, uploaded_by: userRole?.name||"—" }]);
+    }
     setTickets(prev => [record, ...prev]);
     setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "" });
+    setPhotoFiles([]);
     setShowForm(false);
     setSaving(false);
   };
@@ -2855,6 +2927,12 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
           </div>
           <div style={{ marginTop: 12 }}>
             <Textarea label={t(lang,"descriptionNotes")} value={form.description} onChange={f("description")} />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"attachPhotos")}</div>
+            <input type="file" accept="image/*" multiple onChange={e => setPhotoFiles([...(e.target.files||[])])}
+              style={{ fontSize: 12, color: C.subtle }} />
+            {photoFiles.length>0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{photoFiles.length} {t(lang,"filesSelected")}</div>}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"create")}</Btn>
@@ -5498,14 +5576,26 @@ function SiteLayoutModal({ site, onClose, lang, userRole }) {
   const uploadImage = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setUploading(true); setError(null);
-    const layoutId = layout?.id || uid("LAY");
-    const path = `site-layouts/${site}/${Date.now()}-${file.name}`;
-    const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
-    if (upErr) { setError(upErr.message); setUploading(false); return; }
-    const record = { id: layoutId, site, file_name: file.name, file_path: path, uploaded_by: userRole?.name || null };
-    const { error: err } = await supabase.from("site_layouts").upsert([record], { onConflict: "site" });
-    if (err) { setError(err.message); setUploading(false); return; }
-    setLayout(record);
+    try {
+      let uploadFile = file;
+      let fileName = file.name;
+      if (file.type === "application/pdf") {
+        const blob = await pdfFirstPageToPngBlob(file);
+        if (!blob) { setError("Could not read that PDF."); setUploading(false); return; }
+        fileName = file.name.replace(/\.pdf$/i, "") + ".png";
+        uploadFile = new File([blob], fileName, { type: "image/png" });
+      }
+      const layoutId = layout?.id || uid("LAY");
+      const path = `site-layouts/${site}/${Date.now()}-${fileName}`;
+      const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, uploadFile);
+      if (upErr) { setError(upErr.message); setUploading(false); return; }
+      const record = { id: layoutId, site, file_name: fileName, file_path: path, uploaded_by: userRole?.name || null };
+      const { error: err } = await supabase.from("site_layouts").upsert([record], { onConflict: "site" });
+      if (err) { setError(err.message); setUploading(false); return; }
+      setLayout(record);
+    } catch (ex) {
+      setError(ex.message || "Failed to process that file.");
+    }
     setUploading(false);
   };
 
@@ -5544,10 +5634,11 @@ function SiteLayoutModal({ site, onClose, lang, userRole }) {
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
           {loading ? <Spinner lang={lang} /> : (
             <>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accent, color: "#fff", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: uploading?"not-allowed":"pointer", opacity: uploading?0.7:1, marginBottom: 16 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accent, color: "#fff", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: uploading?"not-allowed":"pointer", opacity: uploading?0.7:1, marginBottom: 8 }}>
                 {uploading ? "⏳..." : `📤 ${layout ? t(lang,"replaceLayout") : t(lang,"uploadLayout")}`}
-                <input type="file" accept="image/*" onChange={uploadImage} style={{ display: "none" }} disabled={uploading} />
+                <input type="file" accept="image/*,application/pdf" onChange={uploadImage} style={{ display: "none" }} disabled={uploading} />
               </label>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 16 }}>{t(lang,"layoutFileHint")}</div>
               {!layout ? (
                 <div style={{ textAlign: "center", padding: 32, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>{t(lang,"noLayoutYet")}</div>
               ) : (
