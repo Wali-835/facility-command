@@ -2513,8 +2513,9 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   );
 }
 const TICKET_STATUSES = ["Open","In Progress","Resolved","Closed"];
+const ARCHIVED_TICKET_STATUSES = ["Resolved","Closed"];
 
-function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor, technicians, vendors, workOrders, setWorkOrders, lang, userRole }) {
+function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor, technicians, vendors, departmentOptions, workOrders, setWorkOrders, lang, userRole }) {
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [comment, setComment] = useState("");
@@ -2523,6 +2524,10 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
   const [assigning, setAssigning] = useState(false);
   const [assignTech, setAssignTech] = useState(ticket.assignee || "— Unassigned —");
   const [assignVendor, setAssignVendor] = useState(ticket.vendor || "— None —");
+  const [assignDepts, setAssignDepts] = useState(ticket.departments || []);
+  const [customDept, setCustomDept] = useState("");
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [targetDateVal, setTargetDateVal] = useState(ticket.target_date || "");
 
   useEffect(() => { loadEvents(); }, []);
   const loadEvents = async () => {
@@ -2560,15 +2565,35 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
     setSaving(true); setError(null);
     const assignee = assignTech === "— Unassigned —" ? null : assignTech;
     const vendor = assignVendor === "— None —" ? null : assignVendor;
-    const { error: err } = await supabase.from("tickets").update({ assignee, vendor }).eq("id", ticket.id);
+    const departments = assignDepts.length ? assignDepts : null;
+    const { error: err } = await supabase.from("tickets").update({ assignee, vendor, departments }).eq("id", ticket.id);
     if (err) { setError(err.message); setSaving(false); return; }
     const parts = [];
     if (assignee) parts.push(`${t(lang,"assignee")}: ${assignee}`);
     if (vendor) parts.push(`${t(lang,"vendor")}: ${vendor}`);
+    if (departments) parts.push(`${t(lang,"departments")}: ${departments.join(", ")}`);
     await logEvent("assignment", parts.length ? parts.join(" · ") : t(lang,"unassigned"));
     if (assignee && assignee !== ticket.assignee) await notifyAssignee(assignee, `${t(lang,"assignedToTicket")}: ${ticket.title} (${ticket.id})`, ticket.id);
-    onUpdated({ ...ticket, assignee, vendor });
+    onUpdated({ ...ticket, assignee, vendor, departments });
     setAssigning(false);
+    setSaving(false);
+  };
+
+  const toggleDept = (d) => setAssignDepts(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  const addCustomDept = () => {
+    const d = customDept.trim();
+    if (!d || assignDepts.includes(d)) return;
+    setAssignDepts(prev => [...prev, d]);
+    setCustomDept("");
+  };
+
+  const saveTargetDate = async () => {
+    setSaving(true); setError(null);
+    const { error: err } = await supabase.from("tickets").update({ target_date: targetDateVal || null }).eq("id", ticket.id);
+    if (err) { setError(err.message); setSaving(false); return; }
+    await logEvent("target_date_change", targetDateVal ? `${t(lang,"targetCompletion")}: ${fmtDate(targetDateVal)}` : t(lang,"targetCompletion"));
+    onUpdated({ ...ticket, target_date: targetDateVal || null });
+    setEditingTarget(false);
     setSaving(false);
   };
 
@@ -2610,6 +2635,12 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
             {ticket.vendor && <span>{t(lang,"vendor")}: <strong style={{ color: C.text }}>{ticket.vendor}</strong></span>}
             {ticket.work_order_id && <span>{t(lang,"linkedWorkOrder")}: <strong style={{ color: C.text, fontFamily: "monospace" }}>{ticket.work_order_id}</strong></span>}
           </div>
+          {(ticket.departments?.length>0 || ticket.target_date) && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+              {(ticket.departments||[]).map(d => <Badge key={d} label={d} color={C.purple} />)}
+              {ticket.target_date && <Badge label={`🎯 ${fmtDate(ticket.target_date)}`} color={ticket.target_date<TODAY && !ARCHIVED_TICKET_STATUSES.includes(ticket.status) ? C.red : C.muted} />}
+            </div>
+          )}
           {isSupervisor && (
             <div style={{ marginBottom: 20, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: assigning?12:0 }}>
@@ -2625,15 +2656,52 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
                     <Sel label={t(lang,"assignee")} value={assignTech} onChange={setAssignTech} options={technicianOptions} />
                     <Sel label={t(lang,"vendor")} value={assignVendor} onChange={setAssignVendor} options={vendorOptions} />
                   </div>
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"departments")}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                      {(departmentOptions||[]).map(d => (
+                        <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.subtle, cursor: "pointer", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px" }}>
+                          <input type="checkbox" checked={assignDepts.includes(d)} onChange={() => toggleDept(d)} /> {d}
+                        </label>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input value={customDept} onChange={e => setCustomDept(e.target.value)} placeholder={t(lang,"departmentPlaceholder")} onKeyDown={e => e.key==="Enter" && addCustomDept()}
+                        style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 12 }} />
+                      <Btn small variant="secondary" onClick={addCustomDept}>+ {t(lang,"add")}</Btn>
+                    </div>
+                    {assignDepts.length>0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                      {assignDepts.map(d => <Badge key={d} label={d} color={C.purple} />)}
+                    </div>}
+                  </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                     <Btn small onClick={saveAssignment} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
-                    <Btn small variant="secondary" onClick={() => { setAssigning(false); setAssignTech(ticket.assignee||"— Unassigned —"); setAssignVendor(ticket.vendor||"— None —"); }}>{t(lang,"cancel")}</Btn>
+                    <Btn small variant="secondary" onClick={() => { setAssigning(false); setAssignTech(ticket.assignee||"— Unassigned —"); setAssignVendor(ticket.vendor||"— None —"); setAssignDepts(ticket.departments||[]); }}>{t(lang,"cancel")}</Btn>
                   </div>
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: (ticket.assignee||ticket.vendor)?C.subtle:C.muted, marginTop: 6 }}>
-                  {ticket.assignee || ticket.vendor ? [ticket.assignee, ticket.vendor].filter(Boolean).join(" · ") : t(lang,"unassigned")}
+                <div style={{ fontSize: 12, color: (ticket.assignee||ticket.vendor||ticket.departments?.length)?C.subtle:C.muted, marginTop: 6 }}>
+                  {ticket.assignee || ticket.vendor || ticket.departments?.length ? [ticket.assignee, ticket.vendor, ...(ticket.departments||[])].filter(Boolean).join(" · ") : t(lang,"unassigned")}
                 </div>
+              )}
+            </div>
+          )}
+          {isSupervisor && (
+            <div style={{ marginBottom: 20, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: editingTarget?12:0 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>🎯 {t(lang,"targetCompletion")}</div>
+                {!editingTarget && <button onClick={() => setEditingTarget(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12 }}>{t(lang,"edit")}</button>}
+              </div>
+              {editingTarget ? (
+                <div>
+                  <Input value={targetDateVal} onChange={setTargetDateVal} type="date" />
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <Btn small onClick={saveTargetDate} disabled={saving}>{saving?t(lang,"saving"):t(lang,"save")}</Btn>
+                    <Btn small variant="secondary" onClick={() => { setEditingTarget(false); setTargetDateVal(ticket.target_date||""); }}>{t(lang,"cancel")}</Btn>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: ticket.target_date?C.subtle:C.muted, marginTop: 6 }}>{ticket.target_date?fmtDate(ticket.target_date):"—"}</div>
               )}
             </div>
           )}
@@ -2677,13 +2745,15 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("Open");
-  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "" });
+  const [statusFilter, setStatusFilter] = useState("Active");
+  const [deptFilter, setDeptFilter] = useState("All");
+  const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "" });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const [layouts, setLayouts] = useState([]);
   const [layoutPoints, setLayoutPoints] = useState([]);
+  const [departmentOptions, setDepartmentOptions] = useState([]);
 
-  useEffect(() => { loadTickets(); loadLayouts(); }, []);
+  useEffect(() => { loadTickets(); loadLayouts(); loadDepartments(); }, []);
   const loadTickets = async () => {
     setLoading(true);
     const { data, error: err } = await supabase.from("tickets").select("*").order("requested_at", { ascending: false });
@@ -2698,6 +2768,10 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
     setLayouts(lRes.data || []);
     setLayoutPoints(pRes.data || []);
   };
+  const loadDepartments = async () => {
+    const { data } = await supabase.from("user_roles").select("department").not("department", "is", null);
+    setDepartmentOptions([...new Set((data||[]).map(u => u.department).filter(Boolean))].sort());
+  };
 
   const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
   const assetOptions = ["— None —", ...(assets||[]).map(a => a.name)];
@@ -2710,27 +2784,39 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
     const assetObj = (assets||[]).find(a => a.name === form.asset);
-    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, location_detail: form.location_detail||null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
+    const record = { id: uid("TCK"), title: form.title, description: form.description||null, category: form.category, priority: form.priority, status: "Open", site: form.site||null, location_detail: form.location_detail||null, target_date: form.target_date||null, asset_id: assetObj?.id||null, asset_name: form.asset||null, work_order_id: (form.work_order_id==="— None —"||!form.work_order_id)?null:form.work_order_id, requested_by: userRole?.name||"—", assignee: (form.assignee==="— Unassigned —"||!form.assignee)?null:form.assignee };
     const { error: err } = await supabase.from("tickets").insert([record]);
     if (err) { setError(err.message); setSaving(false); return; }
     await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: form.description||null, by: userRole?.name||"—", department: userRole?.department||null }]);
     setTickets(prev => [record, ...prev]);
-    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "" });
+    setForm({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "" });
     setShowForm(false);
     setSaving(false);
   };
 
-  const filtered = statusFilter === "All" ? tickets : tickets.filter(tk => tk.status === statusFilter);
+  const filtered = tickets
+    .filter(tk => statusFilter==="All" ? true : statusFilter==="Active" ? !ARCHIVED_TICKET_STATUSES.includes(tk.status) : statusFilter==="Archived" ? ARCHIVED_TICKET_STATUSES.includes(tk.status) : tk.status===statusFilter)
+    .filter(tk => deptFilter==="All" || (tk.departments||[]).includes(deptFilter));
 
   return (
     <div>
-      {selected && <TicketDetail ticket={selected} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} isMaintenance={isMaintenance} isSupervisor={isSupervisor} technicians={technicians} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} userRole={userRole} />}
+      {selected && <TicketDetail ticket={selected} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} isMaintenance={isMaintenance} isSupervisor={isSupervisor} technicians={technicians} vendors={vendors} departmentOptions={departmentOptions} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} userRole={userRole} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
-          <option value="All">{t(lang,"all")}</option>
-          {TICKET_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+            <option value="Active">{t(lang,"activeFilter")}</option>
+            <option value="Archived">{t(lang,"archived")}</option>
+            <option value="All">{t(lang,"all")}</option>
+            {TICKET_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {departmentOptions.length>0 && (
+            <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"departments")}</option>
+              {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
+        </div>
         <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newTicket")}</Btn>
       </div>
 
@@ -2745,6 +2831,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
             <Sel label={t(lang,"linkedAssetOptional")} value={form.asset||"— None —"} onChange={f("asset")} options={assetOptions} />
             <Sel label={t(lang,"linkedWorkOrderOptional")} value={form.work_order_id||"— None —"} onChange={f("work_order_id")} options={woOptions} />
             {isMaintenance && <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />}
+            {isSupervisor && <Input label={t(lang,"targetCompletion")} value={form.target_date} onChange={f("target_date")} type="date" />}
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t(lang,"specificLocation")}</div>
@@ -2783,6 +2870,12 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{tk.title}</div>
                 <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{tk.category||"—"}{tk.site?` · ${tk.site}`:""}{tk.location_detail?` · 📍 ${tk.location_detail}`:""}{tk.asset_name?` · ${tk.asset_name}`:""} · {fmtDateTime(tk.requested_at)}</div>
+                {(tk.departments?.length>0 || tk.target_date) && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                    {(tk.departments||[]).map(d => <Badge key={d} label={d} color={C.purple} />)}
+                    {tk.target_date && <Badge label={`🎯 ${fmtDate(tk.target_date)}`} color={tk.target_date<TODAY && !ARCHIVED_TICKET_STATUSES.includes(tk.status) ? C.red : C.muted} />}
+                  </div>
+                )}
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Badge label={tk.priority} color={{Critical:C.red,High:C.accent,Medium:C.yellow,Low:C.muted}[tk.priority]||C.muted} />
