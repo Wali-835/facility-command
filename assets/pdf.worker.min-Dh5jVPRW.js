@@ -1,1 +1,0 @@
-var e=`/facility-command/assets/pdf.worker.min-yatZIOMy.mjs`;export{e as default};
