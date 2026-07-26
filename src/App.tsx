@@ -22,11 +22,17 @@ if (typeof Promise.withResolvers !== "function") {
 // pdfjs-dist (~330KB) is loaded on demand, only when someone actually
 // uploads a PDF, instead of bloating every page load with it.
 async function pdfFirstPageToPngBlob(file) {
-  const [pdfjsLib, { default: pdfjsWorkerUrl }] = await Promise.all([
+  // Loaded as raw text and turned into a blob: URL instead of a plain asset
+  // URL — GitHub Pages (and some other static hosts) can fail to serve a
+  // separately-hashed .mjs worker file correctly ("Failed to fetch
+  // dynamically imported module"). A blob: URL needs no extra network
+  // request or MIME negotiation at all, so it sidesteps that entirely.
+  const [pdfjsLib, { default: workerSrcText }] = await Promise.all([
     import("pdfjs-dist"),
-    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+    import("pdfjs-dist/build/pdf.worker.min.mjs?raw"),
   ]);
-  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
+  const workerBlob = new Blob([workerSrcText], { type: "text/javascript" });
+  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const page = await pdf.getPage(1);
@@ -4377,10 +4383,12 @@ function LowStockAlerts({ lang, isSupervisor }) {
     Promise.all([
       supabase.from("asset_parts").select("*"),
       supabase.from("model_parts").select("*"),
-    ]).then(([apRes, mpRes]) => {
+      supabase.from("subcategory_parts").select("*"),
+    ]).then(([apRes, mpRes, scRes]) => {
       const ap = (apRes.data||[]).filter(p => (p.stock_quantity||0) <= (p.min_stock_level||1)).map(p => ({ ...p, source: "asset" }));
       const mp = (mpRes.data||[]).filter(p => (p.stock_quantity||0) <= (p.min_stock_level||1)).map(p => ({ ...p, asset_name: p.model, source: "model" }));
-      setAlerts([...ap,...mp]);
+      const sc = (scRes.data||[]).filter(p => (p.stock_quantity||0) <= (p.min_stock_level||1)).map(p => ({ ...p, asset_name: `${p.category} / ${p.subcategory}`, source: "subcategory" }));
+      setAlerts([...ap,...mp,...sc]);
     });
   }, []);
   if (!alerts.length || !isSupervisor) return null;
@@ -4896,6 +4904,10 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
   const [partSearch, setPartSearch] = useState("");
   const [partSearchResults, setPartSearchResults] = useState(null);
   const [searchingParts, setSearchingParts] = useState(false);
+  const [catalogMode, setCatalogMode] = useState("model"); // "model" | "category"
+  const [selectedSubcat, setSelectedSubcat] = useState(null); // { category, subcategory }
+  const [knownSubcats, setKnownSubcats] = useState({});
+  const [customSubcatInput, setCustomSubcatInput] = useState({});
 
   useEffect(() => {
     supabase.from("mhe_models").select("id, brand, model, category, subcategory, responsible_name, responsible_email").order("brand").order("model")
@@ -4906,11 +4918,31 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
       .then(({ data }) => setCategoryResp(data || []));
     supabase.from("stock_adjustments").select("*").order("requested_at", { ascending: false })
       .then(({ data }) => setAdjustments(data || []));
+    loadKnownSubcats();
   }, []);
+
+  const loadKnownSubcats = async () => {
+    const { data } = await supabase.from("subcategory_parts").select("category,subcategory");
+    const map = {};
+    WO_CATEGORIES.forEach(c => { map[c] = new Set(CATEGORY_SUBCATEGORIES[c] || []); });
+    (data || []).forEach(r => { if (!map[r.category]) map[r.category] = new Set(); map[r.category].add(r.subcategory); });
+    const out = {};
+    Object.entries(map).forEach(([c, set]) => { out[c] = [...set].sort(); });
+    setKnownSubcats(out);
+  };
+
+  const switchMode = (mode) => {
+    setCatalogMode(mode);
+    setSelectedModel(null);
+    setSelectedSubcat(null);
+    setParts([]);
+    setShowForm(false);
+  };
 
   const requestAdjustment = async (part) => {
     if (!adjQty || parseFloat(adjQty) <= 0) { setError(t(lang, "quantity")); return; }
-    const record = { id: uid("ADJ"), part_id: part.id, part_name: part.part_name, model: selectedModel.model, adjustment_type: adjType, quantity: parseFloat(adjQty), reason: adjReason || null, requested_by: userRole?.name || "", requested_at: new Date().toISOString(), status: "Pending" };
+    const scopeLabel = catalogMode==="model" ? selectedModel.model : `${selectedSubcat.category} / ${selectedSubcat.subcategory}`;
+    const record = { id: uid("ADJ"), part_id: part.id, part_name: part.part_name, model: scopeLabel, part_source: catalogMode, adjustment_type: adjType, quantity: parseFloat(adjQty), reason: adjReason || null, requested_by: userRole?.name || "", requested_at: new Date().toISOString(), status: "Pending" };
     const { error: err } = await supabase.from("stock_adjustments").insert([record]);
     if (err) { setError(err.message); return; }
     setAdjustments(prev => [record, ...prev]);
@@ -4919,10 +4951,11 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
   };
 
   const approveAdjustment = async (adj) => {
-    const { data: mp } = await supabase.from("model_parts").select("stock_quantity").eq("id", adj.part_id).single();
+    const table = adj.part_source === "subcategory" ? "subcategory_parts" : "model_parts";
+    const { data: mp } = await supabase.from(table).select("stock_quantity").eq("id", adj.part_id).single();
     if (!mp) { setError("Part not found."); return; }
     const newQty = adj.adjustment_type === "Add" ? (mp.stock_quantity || 0) + adj.quantity : Math.max(0, (mp.stock_quantity || 0) - adj.quantity);
-    await supabase.from("model_parts").update({ stock_quantity: newQty }).eq("id", adj.part_id);
+    await supabase.from(table).update({ stock_quantity: newQty }).eq("id", adj.part_id);
     await supabase.from("stock_adjustments").update({ status: "Approved", approved_by: userRole?.name || "", approved_at: new Date().toISOString() }).eq("id", adj.id);
     setAdjustments(prev => prev.map(a => a.id === adj.id ? { ...a, status: "Approved" } : a));
     setParts(prev => prev.map(p => p.id === adj.part_id ? { ...p, stock_quantity: newQty } : p));
@@ -4956,29 +4989,65 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
   };
 
   useEffect(() => {
-    if (selectedModel) loadParts();
-    else setParts([]);
-  }, [selectedModel]);
+    if (catalogMode==="model") { if (selectedModel) loadModelParts(); else setParts([]); }
+  }, [selectedModel, catalogMode]);
 
-  const loadParts = async () => {
+  useEffect(() => {
+    if (catalogMode==="category") { if (selectedSubcat) loadSubcatParts(); else setParts([]); }
+  }, [selectedSubcat, catalogMode]);
+
+  const loadModelParts = async () => {
     setLoading(true);
     const { data } = await supabase.from("model_parts").select("*").eq("model_id", selectedModel.id).order("part_name");
     setParts(data || []);
     setLoading(false);
   };
 
+  const loadSubcatParts = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("subcategory_parts").select("*").eq("category", selectedSubcat.category).eq("subcategory", selectedSubcat.subcategory).order("part_name");
+    setParts(data || []);
+    setLoading(false);
+  };
+
   const savePart = async () => {
-    if (!form.part_name || !selectedModel) return;
+    if (!form.part_name) return;
+    if (catalogMode==="model" && !selectedModel) return;
+    if (catalogMode==="category" && !selectedSubcat) return;
     setSaving(true);
-    const record = { id: uid("MPT"), model_id: selectedModel.id, model: selectedModel.model, brand: selectedModel.brand, part_name: form.part_name, part_number: form.part_number||null, supplier: form.supplier||null, unit_cost: parseFloat(form.unit_cost)||0, notes: form.notes||null };
-    const { error: err } = await supabase.from("model_parts").insert([record]);
-    if (err) { setError(err.message); } else { setParts(prev => [...prev, record]); setForm({ part_name: "", part_number: "", supplier: "", unit_cost: "", notes: "" }); setShowForm(false); setSuccess("Part added!"); }
+    const table = catalogMode==="model" ? "model_parts" : "subcategory_parts";
+    const record = catalogMode==="model"
+      ? { id: uid("MPT"), model_id: selectedModel.id, model: selectedModel.model, brand: selectedModel.brand, part_name: form.part_name, part_number: form.part_number||null, supplier: form.supplier||null, unit_cost: parseFloat(form.unit_cost)||0, notes: form.notes||null }
+      : { id: uid("SCP"), category: selectedSubcat.category, subcategory: selectedSubcat.subcategory, part_name: form.part_name, part_number: form.part_number||null, supplier: form.supplier||null, unit_cost: parseFloat(form.unit_cost)||0, notes: form.notes||null };
+    const { error: err } = await supabase.from(table).insert([record]);
+    if (err) { setError(err.message); } else {
+      setParts(prev => [...prev, record]);
+      setForm({ part_name: "", part_number: "", supplier: "", unit_cost: "", notes: "" });
+      setShowForm(false); setSuccess("Part added!");
+      if (catalogMode==="category") loadKnownSubcats();
+    }
     setSaving(false);
   };
 
   const deletePart = async (id) => {
-    await supabase.from("model_parts").delete().eq("id", id);
+    const table = catalogMode==="model" ? "model_parts" : "subcategory_parts";
+    await supabase.from(table).delete().eq("id", id);
     setParts(prev => prev.filter(p => p.id !== id));
+  };
+
+  const updatePartField = async (part, field, value) => {
+    const table = catalogMode==="model" ? "model_parts" : "subcategory_parts";
+    await supabase.from(table).update({ [field]: value }).eq("id", part.id);
+    setParts(prev => prev.map(p => p.id===part.id ? { ...p, [field]: value } : p));
+  };
+
+  const addCustomSubcat = (category) => {
+    const name = (customSubcatInput[category]||"").trim();
+    if (!name) return;
+    setCatalogMode("category");
+    setSelectedModel(null);
+    setSelectedSubcat({ category, subcategory: name });
+    setCustomSubcatInput(p => ({ ...p, [category]: "" }));
   };
 
   const handleImport = (e) => {
@@ -4990,18 +5059,30 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
         const wb = XLSX.read(evt.target.result, { type: "binary" });
         const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
         const records = [];
-        for (const row of data) {
-          const modelName = row["Model"] || row["model"] || "";
-          const brand = row["Brand"] || row["brand"] || "";
-          if (!modelName || !row["Part Name"]) continue;
-          // Find model in DB
-          const found = models.find(m => m.model.toLowerCase() === modelName.toLowerCase());
-          if (!found) continue;
-          records.push({ id: uid("MPT"), model_id: found.id, model: found.model, brand: found.brand || brand, part_name: row["Part Name"] || "", part_number: row["Part Number"] || null, supplier: row["Supplier"] || null, unit_cost: parseFloat(row["Unit Cost"]) || 0, notes: row["Notes"] || null });
+        if (catalogMode === "model") {
+          for (const row of data) {
+            const modelName = row["Model"] || row["model"] || "";
+            const brand = row["Brand"] || row["brand"] || "";
+            if (!modelName || !row["Part Name"]) continue;
+            // Find model in DB
+            const found = models.find(m => m.model.toLowerCase() === modelName.toLowerCase());
+            if (!found) continue;
+            records.push({ id: uid("MPT"), model_id: found.id, model: found.model, brand: found.brand || brand, part_name: row["Part Name"] || "", part_number: row["Part Number"] || null, supplier: row["Supplier"] || null, unit_cost: parseFloat(row["Unit Cost"]) || 0, notes: row["Notes"] || null });
+          }
+          if (records.length === 0) { setError("No valid rows found. Check column names."); setImporting(false); return; }
+          const { error: err } = await supabase.from("model_parts").insert(records);
+          if (err) { setError(err.message); } else { setSuccess(`${t(lang,"partImported")} (${records.length} parts)`); if (selectedModel) loadModelParts(); }
+        } else {
+          for (const row of data) {
+            const category = row["Category"] || row["category"] || "";
+            const subcategory = row["Subcategory"] || row["subcategory"] || "";
+            if (!category || !subcategory || !row["Part Name"]) continue;
+            records.push({ id: uid("SCP"), category, subcategory, part_name: row["Part Name"] || "", part_number: row["Part Number"] || null, supplier: row["Supplier"] || null, unit_cost: parseFloat(row["Unit Cost"]) || 0, notes: row["Notes"] || null });
+          }
+          if (records.length === 0) { setError("No valid rows found. Check column names."); setImporting(false); return; }
+          const { error: err } = await supabase.from("subcategory_parts").insert(records);
+          if (err) { setError(err.message); } else { setSuccess(`${t(lang,"partImported")} (${records.length} parts)`); loadKnownSubcats(); if (selectedSubcat) loadSubcatParts(); }
         }
-        if (records.length === 0) { setError("No valid rows found. Check column names."); setImporting(false); return; }
-        const { error: err } = await supabase.from("model_parts").insert(records);
-        if (err) { setError(err.message); } else { setSuccess(`${t(lang,"partImported")} (${records.length} parts)`); if (selectedModel) loadParts(); }
       } catch { setError("Failed to parse file."); }
       setImporting(false);
     };
@@ -5013,16 +5094,31 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
     if (!q) { setPartSearchResults(null); return; }
     setSearchingParts(true);
     const timer = setTimeout(async () => {
-      const { data } = await supabase.from("model_parts").select("*").or(`part_name.ilike.%${q}%,part_number.ilike.%${q}%`).order("part_name").limit(50);
-      setPartSearchResults(data || []);
+      const [mRes, sRes] = await Promise.all([
+        supabase.from("model_parts").select("*").or(`part_name.ilike.%${q}%,part_number.ilike.%${q}%`).order("part_name").limit(30),
+        supabase.from("subcategory_parts").select("*").or(`part_name.ilike.%${q}%,part_number.ilike.%${q}%`).order("part_name").limit(30),
+      ]);
+      const merged = [
+        ...(mRes.data||[]).map(p => ({ ...p, _source: "model" })),
+        ...(sRes.data||[]).map(p => ({ ...p, _source: "subcategory" })),
+      ];
+      setPartSearchResults(merged);
       setSearchingParts(false);
     }, 300);
     return () => clearTimeout(timer);
   }, [partSearch]);
 
   const jumpToPart = (part) => {
-    const model = models.find(m => m.id === part.model_id) || models.find(m => m.model === part.model);
-    if (model) setSelectedModel(model);
+    if (part._source === "subcategory") {
+      setCatalogMode("category");
+      setSelectedModel(null);
+      setSelectedSubcat({ category: part.category, subcategory: part.subcategory });
+    } else {
+      setCatalogMode("model");
+      setSelectedSubcat(null);
+      const model = models.find(m => m.id === part.model_id) || models.find(m => m.model === part.model);
+      if (model) setSelectedModel(model);
+    }
     setPartSearch(""); setPartSearchResults(null);
   };
 
@@ -5054,7 +5150,7 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
 
       {/* Excel format hint */}
       <div style={{ background: C.blue+"11", border: `1px solid ${C.blue}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.blue, marginBottom: 20 }}>
-        📋 {t(lang,"excelFormat")}
+        📋 {catalogMode==="model" ? t(lang,"excelFormat") : t(lang,"excelFormatCategory")}
       </div>
 
       {/* Category responsibility */}
@@ -5121,7 +5217,7 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
                 <div key={p.id} onClick={() => jumpToPart(p)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.surface, borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
                   <div>
                     <span style={{ color: C.text, fontWeight: 600, fontSize: 13 }}>{p.part_name}</span>
-                    <span style={{ color: C.muted, fontSize: 12 }}> {p.part_number?`(${p.part_number})`:""} — {p.brand} {p.model}</span>
+                    <span style={{ color: C.muted, fontSize: 12 }}> {p.part_number?`(${p.part_number})`:""} — {p._source==="subcategory" ? `${p.category} / ${p.subcategory}` : `${p.brand} ${p.model}`}</span>
                   </div>
                   <Badge label={(p.stock_quantity||0)===0?t(lang,"outOfStock"):`${p.stock_quantity||0}`} color={(p.stock_quantity||0)===0?C.red:C.muted} />
                 </div>
@@ -5131,8 +5227,15 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
         )}
       </div>
 
+      {/* Catalog mode toggle */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button onClick={() => switchMode("model")} style={{ background: catalogMode==="model"?C.accent:C.card, color: catalogMode==="model"?"#fff":C.muted, border: `1px solid ${catalogMode==="model"?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>🏭 {t(lang,"byEquipmentModel")}</button>
+        <button onClick={() => switchMode("category")} style={{ background: catalogMode==="category"?C.accent:C.card, color: catalogMode==="category"?"#fff":C.muted, border: `1px solid ${catalogMode==="category"?C.accent:C.border}`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>🗂 {t(lang,"byCategory")}</button>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20, alignItems: "start" }}>
-        {/* Model List */}
+        {catalogMode==="model" ? (
+        /* Model List */
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>📦 {t(lang,"selectModel")}</div>
@@ -5161,34 +5264,69 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
             ))}
           </div>
         </div>
+        ) : (
+        /* Category / Subcategory List */
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700, color: C.text }}>🗂 {t(lang,"selectCategory")}</div>
+          <div style={{ maxHeight: 600, overflowY: "auto" }}>
+            {WO_CATEGORIES.map(cat => (
+              <div key={cat}>
+                <div style={{ padding: "8px 16px", fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", background: C.surface, letterSpacing: "0.07em" }}>{CATEGORY_ICONS[cat]||"🔧"} {cat}</div>
+                {(knownSubcats[cat]||[]).map(sc => {
+                  const isSelected = selectedSubcat?.category===cat && selectedSubcat?.subcategory===sc;
+                  return (
+                    <div key={sc} onClick={() => setSelectedSubcat({ category: cat, subcategory: sc })} style={{ padding: "10px 16px", cursor: "pointer", background: isSelected?C.accent+"22":"transparent", borderLeft: `3px solid ${isSelected?C.accent:"transparent"}` }}>
+                      <div style={{ fontSize: 13, fontWeight: isSelected?700:400, color: isSelected?C.accent:C.text }}>{sc}</div>
+                    </div>
+                  );
+                })}
+                {isAdmin && (
+                  <div style={{ padding: "6px 16px 10px", display: "flex", gap: 4 }}>
+                    <input value={customSubcatInput[cat]||""} onChange={e => setCustomSubcatInput(p => ({ ...p, [cat]: e.target.value }))} onKeyDown={e => e.key==="Enter" && addCustomSubcat(cat)} placeholder={t(lang,"addSubcategory")}
+                      style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: "4px 6px", color: C.text, fontSize: 11 }} />
+                    <button onClick={() => addCustomSubcat(cat)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 4, color: C.accent, cursor: "pointer", fontSize: 11, padding: "0 8px" }}>+</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        )}
 
         {/* Parts Panel */}
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-          {!selectedModel ? (
+          {(catalogMode==="model" ? !selectedModel : !selectedSubcat) ? (
             <div style={{ textAlign: "center", padding: 60, color: C.muted, fontSize: 13 }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>🔩</div>
-              {t(lang,"noModelSelected")}
+              {catalogMode==="model" ? t(lang,"noModelSelected") : t(lang,"noSubcategorySelected")}
             </div>
           ) : (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{selectedModel.brand} {selectedModel.model}</div>
-                  <div style={{ fontSize: 12, color: C.muted }}>{selectedModel.subcategory} · {parts.length} {t(lang,"partsCount")}</div>
-                  {isAdmin && editingModelResp ? (
-                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                      <select value={modelRespName} onChange={e => setModelRespName(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }}>
-                        <option value="">{t(lang,"unassigned")}</option>
-                        {users.map(u => <option key={u.name} value={u.name}>{u.name}</option>)}
-                      </select>
-                      <Btn small onClick={() => saveModelResponsible(modelRespName)}>{t(lang,"save")}</Btn>
-                    </div>
-                  ) : (
-                    <div onClick={() => { if (isAdmin) { setEditingModelResp(true); setModelRespName(selectedModel.responsible_name||""); } }} style={{ fontSize: 12, color: selectedModel.responsible_name?C.accent:C.muted, cursor: isAdmin?"pointer":"default", marginTop: 4 }}>
-                      👤 {t(lang,"responsibleUser")}: {selectedModel.responsible_name || t(lang,"unassigned")} {isAdmin && "✏️"}
-                    </div>
-                  )}
-                </div>
+                {catalogMode==="model" ? (
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{selectedModel.brand} {selectedModel.model}</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>{selectedModel.subcategory} · {parts.length} {t(lang,"partsCount")}</div>
+                    {isAdmin && editingModelResp ? (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <select value={modelRespName} onChange={e => setModelRespName(e.target.value)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", color: C.text, fontSize: 12 }}>
+                          <option value="">{t(lang,"unassigned")}</option>
+                          {users.map(u => <option key={u.name} value={u.name}>{u.name}</option>)}
+                        </select>
+                        <Btn small onClick={() => saveModelResponsible(modelRespName)}>{t(lang,"save")}</Btn>
+                      </div>
+                    ) : (
+                      <div onClick={() => { if (isAdmin) { setEditingModelResp(true); setModelRespName(selectedModel.responsible_name||""); } }} style={{ fontSize: 12, color: selectedModel.responsible_name?C.accent:C.muted, cursor: isAdmin?"pointer":"default", marginTop: 4 }}>
+                        👤 {t(lang,"responsibleUser")}: {selectedModel.responsible_name || t(lang,"unassigned")} {isAdmin && "✏️"}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{CATEGORY_ICONS[selectedSubcat.category]||"🔧"} {selectedSubcat.subcategory}</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>{selectedSubcat.category} · {parts.length} {t(lang,"partsCount")}</div>
+                  </div>
+                )}
                 {isAdmin && <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addPartToModel")}</Btn>}
               </div>
 
@@ -5226,11 +5364,8 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
                             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                 {isAdmin ? (
-                                  <input type="number" value={part.stock_quantity||0} onChange={async e => {
-                                    const qty = parseFloat(e.target.value)||0;
-                                    await supabase.from("model_parts").update({ stock_quantity: qty }).eq("id", part.id);
-                                    setParts(prev => prev.map(p => p.id===part.id?{...p,stock_quantity:qty}:p));
-                                  }} style={{ width: 60, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 6px", color: C.text, fontSize: 12 }} />
+                                  <input type="number" value={part.stock_quantity||0} onChange={e => updatePartField(part, "stock_quantity", parseFloat(e.target.value)||0)}
+                                    style={{ width: 60, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 6px", color: C.text, fontSize: 12 }} />
                                 ) : (
                                   <span style={{ color: C.text, fontWeight: 700 }}>{part.stock_quantity||0}</span>
                                 )}
@@ -5259,11 +5394,8 @@ function PartsCatalogMgmt({ lang, isAdmin, isSupervisor, isEngineer, userRole })
                           </td>
                           <td style={{ padding: "10px 12px" }}>
                             {isAdmin ? (
-                              <input type="number" value={part.min_stock_level||1} onChange={async e => {
-                                const qty = parseFloat(e.target.value)||1;
-                                await supabase.from("model_parts").update({ min_stock_level: qty }).eq("id", part.id);
-                                setParts(prev => prev.map(p => p.id===part.id?{...p,min_stock_level:qty}:p));
-                              }} style={{ width: 50, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 6px", color: C.text, fontSize: 12 }} />
+                              <input type="number" value={part.min_stock_level||1} onChange={e => updatePartField(part, "min_stock_level", parseFloat(e.target.value)||1)}
+                                style={{ width: 50, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 6px", color: C.text, fontSize: 12 }} />
                             ) : <span style={{ color: C.subtle }}>{part.min_stock_level||1}</span>}
                           </td>
                           <td style={{ padding: "10px 12px", color: C.subtle }}>{part.supplier||"—"}</td>
