@@ -5,6 +5,8 @@ import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import jsPDF from "jspdf";
 import { applyPlugin } from "jspdf-autotable";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorkerSrcText from "pdfjs-dist/build/pdf.worker.min.mjs?raw";
 import { supabase } from "./supabase";
 
 // pdfjs-dist relies on Promise.withResolvers (ES2024), which older browsers
@@ -17,22 +19,18 @@ if (typeof Promise.withResolvers !== "function") {
   };
 }
 
+// The worker is bundled as raw text (statically, not via a runtime dynamic
+// import) and turned into a blob: URL. GitHub Pages does not reliably serve
+// a separately-hashed .mjs/.js chunk in a way the browser will accept for a
+// dynamic import ("Failed to fetch dynamically imported module"), so this
+// avoids any runtime fetch of pdf.js code entirely — everything ships in
+// the main bundle up front.
+const pdfWorkerBlobUrl = URL.createObjectURL(new Blob([pdfWorkerSrcText], { type: "text/javascript" }));
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerBlobUrl;
+
 // Renders page 1 of a PDF file to a PNG Blob so it can be handled downstream
 // exactly like an uploaded image (pin placement, <img> rendering, etc.).
-// pdfjs-dist (~330KB) is loaded on demand, only when someone actually
-// uploads a PDF, instead of bloating every page load with it.
 async function pdfFirstPageToPngBlob(file) {
-  // Loaded as raw text and turned into a blob: URL instead of a plain asset
-  // URL — GitHub Pages (and some other static hosts) can fail to serve a
-  // separately-hashed .mjs worker file correctly ("Failed to fetch
-  // dynamically imported module"). A blob: URL needs no extra network
-  // request or MIME negotiation at all, so it sidesteps that entirely.
-  const [pdfjsLib, { default: workerSrcText }] = await Promise.all([
-    import("pdfjs-dist"),
-    import("pdfjs-dist/build/pdf.worker.min.mjs?raw"),
-  ]);
-  const workerBlob = new Blob([workerSrcText], { type: "text/javascript" });
-  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const page = await pdf.getPage(1);
