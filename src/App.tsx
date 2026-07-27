@@ -30,11 +30,20 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerBlobUrl;
 
 // Renders page 1 of a PDF file to a PNG Blob so it can be handled downstream
 // exactly like an uploaded image (pin placement, <img> rendering, etc.).
+// Large-format sheets (architectural drawings, e.g. ARCH D/E sized floor
+// plans) are many times bigger than a letter/A4 page — rendering those at a
+// fixed scale can produce a canvas past what browsers allow (commonly
+// somewhere around 16-32 million pixels, lower still on mobile), which fails
+// silently. The scale is capped so the longest side never exceeds a safe
+// pixel budget, regardless of the PDF's physical page size.
+const PDF_RENDER_MAX_DIMENSION = 3000;
 async function pdfFirstPageToPngBlob(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 2 });
+  const nativeViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(2, PDF_RENDER_MAX_DIMENSION / Math.max(nativeViewport.width, nativeViewport.height));
+  const viewport = page.getViewport({ scale });
   const canvas = document.createElement("canvas");
   canvas.width = viewport.width;
   canvas.height = viewport.height;
