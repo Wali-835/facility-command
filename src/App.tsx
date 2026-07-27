@@ -5,19 +5,10 @@ import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import jsPDF from "jspdf";
 import { applyPlugin } from "jspdf-autotable";
+import "./promiseWithResolversPolyfill.js";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerSrcText from "pdfjs-dist/build/pdf.worker.min.mjs?raw";
 import { supabase } from "./supabase";
-
-// pdfjs-dist relies on Promise.withResolvers (ES2024), which older browsers
-// don't have yet — polyfill it so the PDF layout upload doesn't crash there.
-if (typeof Promise.withResolvers !== "function") {
-  Promise.withResolvers = function () {
-    let resolve, reject;
-    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-    return { promise, resolve, reject };
-  };
-}
 
 // The worker is bundled as raw text (statically, not via a runtime dynamic
 // import) and turned into a blob: URL. GitHub Pages does not reliably serve
