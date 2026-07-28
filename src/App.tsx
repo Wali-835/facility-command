@@ -4654,6 +4654,60 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
 
   const [reportSite, setReportSite] = useState("All"); const [reportCategory, setReportCategory] = useState("All"); const [sendingReport, setSendingReport] = useState(false); const [reportMsg, setReportMsg] = useState(null);
 
+  const [checklistExecs, setChecklistExecs] = useState([]);
+  const [checklistLoading, setChecklistLoading] = useState(true);
+  const [checklistSiteFilter, setChecklistSiteFilter] = useState("All");
+
+  useEffect(() => { loadChecklistReport(); }, []);
+  const loadChecklistReport = async () => {
+    setChecklistLoading(true);
+    const { data: execs } = await supabase.from("checklist_executions").select("*").order("execution_date", { ascending: false }).limit(300);
+    const execIds = (execs||[]).map(e => e.id);
+    const [logsRes, usersRes] = await Promise.all([
+      execIds.length ? supabase.from("maintenance_logs").select("checklist_execution_id, approval_status, approved_by, approved_at").in("checklist_execution_id", execIds) : Promise.resolve({ data: [] }),
+      supabase.from("user_roles").select("name, role"),
+    ]);
+    const logByExec = {}; (logsRes.data||[]).forEach(l => { logByExec[l.checklist_execution_id] = l; });
+    const roleByName = {}; (usersRes.data||[]).forEach(u => { roleByName[u.name] = u.role; });
+    const merged = (execs||[]).map(e => {
+      const log = logByExec[e.id];
+      const asset = assets.find(a => a.id === e.asset_id);
+      return {
+        ...e,
+        site: asset?.location || null,
+        approval_status: log?.approval_status || null,
+        approved_by: log?.approved_by || null,
+        approved_at: log?.approved_at || null,
+        approver_role: log?.approved_by ? (roleByName[log.approved_by] || null) : null,
+        performer_role: roleByName[e.executed_by] || null,
+      };
+    });
+    setChecklistExecs(merged);
+    setChecklistLoading(false);
+  };
+
+  const checklistExecsFiltered = checklistSiteFilter==="All" ? checklistExecs : checklistExecs.filter(e => e.site===checklistSiteFilter);
+  const checklistApprovalLabel = (e) => {
+    if (!e.approval_status) return t(lang,"pendingApproval");
+    if (e.approval_status==="Approved") return `${e.approved_by||"—"}${e.approver_role?` (${e.approver_role})`:""}`;
+    if (e.approval_status==="Rejected") return t(lang,"rejected");
+    return t(lang,"pendingApproval");
+  };
+
+  const exportChecklistPDF = () => {
+    applyPlugin(jsPDF);
+    const doc = new jsPDF();
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("CIL Checklist Compliance Report",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${checklistSiteFilter!=="All"?` · Site: ${checklistSiteFilter}`:""}`,14,26);
+    doc.setTextColor(0,0,0);
+    doc.autoTable({
+      startY: 34,
+      head: [["Asset","Site","Timestamp","Status","Performed By","Approved By (Role)"]],
+      body: checklistExecsFiltered.map(e => [e.asset_name||"—", e.site||"—", fmtDateTime(e.created_at||e.execution_date), e.status||"—", e.executed_by||"—", checklistApprovalLabel(e)]),
+      headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 },
+    });
+    doc.save(`Checklist_Compliance_${TODAY}.pdf`);
+  };
+
   const assetOf = (name) => assets.find(a => a.name === name);
   const matchesFilter = (site, category) => (reportSite==="All"||site===reportSite) && (reportCategory==="All"||category===reportCategory);
   const isFiltered = reportSite!=="All" || reportCategory!=="All";
@@ -4790,6 +4844,43 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
           {sendingReport ? t(lang,"sending") : `✉️ ${t(lang,"emailFilteredReport")}`}
         </button>
         {reportMsg && <div style={{ fontSize: 12, fontWeight: 600, color: reportMsg.ok?C.green:C.red }}>{reportMsg.text}</div>}
+      </div>
+
+      {/* Checklist compliance report */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>✅ {t(lang,"checklistComplianceReport")}</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={checklistSiteFilter} onChange={e => setChecklistSiteFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"site")}</option>
+              {(sites||[]).filter(s => s !== "— Select Site —").map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button onClick={exportChecklistPDF} disabled={checklistLoading || checklistExecsFiltered.length===0} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"exportPDF")}</button>
+          </div>
+        </div>
+        {checklistLoading ? <Spinner lang={lang} /> : checklistExecsFiltered.length===0 ? (
+          <div style={{ textAlign: "center", padding: 24, color: C.muted, fontSize: 13 }}>{t(lang,"noChecklistsFound")}</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {[t(lang,"assetName"),t(lang,"site"),t(lang,"date"),t(lang,"status"),t(lang,"performedBy"),t(lang,"approvedBy")].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {checklistExecsFiltered.slice(0,100).map((e,i) => (
+                  <tr key={e.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                    <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{e.asset_name||"—"}</td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{e.site||"—"}</td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{fmtDateTime(e.created_at||e.execution_date)}</td>
+                    <td style={{ padding: "8px 10px" }}><Badge label={e.status||"—"} color={e.status==="Completed"?C.green:C.yellow} /></td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{e.executed_by||"—"}</td>
+                    <td style={{ padding: "8px 10px", color: e.approval_status==="Approved"?C.green:C.muted }}>{checklistApprovalLabel(e)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {loading ? <Spinner lang={lang} /> : (
