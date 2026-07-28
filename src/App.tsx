@@ -117,6 +117,33 @@ const formatDowntime = (minutes) => {
   return m > 0 ? `${h}h ${m}min` : `${h}h`;
 };
 
+// Generic "print this record" PDF — a key/value field table plus an
+// optional log/items table underneath. Used for single-record exports
+// (a breakdown, a ticket, a checklist execution) so each shares the same
+// look as the rest of the app's PDF exports.
+function exportDetailPDF({ title, subtitle, fields, tableTitle, tableHead, tableRows, filename }) {
+  applyPlugin(jsPDF);
+  const doc = new jsPDF();
+  doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(15); doc.setFont("helvetica","bold"); doc.text(title,14,13); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text(subtitle||"Facility Command", 14, 21);
+  doc.setTextColor(0,0,0);
+  doc.autoTable({
+    startY: 36,
+    body: fields.filter(([,v]) => v!==null && v!==undefined && v!==""),
+    theme: "plain", styles: { fontSize: 10, cellPadding: 2 },
+    columnStyles: { 0: { fontStyle: "bold", cellWidth: 55, textColor: [100,100,100] } },
+    margin: { left: 14, right: 14 },
+  });
+  if (tableRows && tableRows.length) {
+    const y = doc.lastAutoTable.finalY + 10;
+    doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.text(tableTitle||"Log", 14, y);
+    doc.autoTable({ startY: y+4, head: [tableHead], body: tableRows, headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, styles: { fontSize: 9 }, margin: { left: 14, right: 14 } });
+  } else if (tableTitle) {
+    const y = doc.lastAutoTable.finalY + 10;
+    doc.setFontSize(11); doc.setFont("helvetica","italic"); doc.setTextColor(150,150,150); doc.text(`${tableTitle}: none`, 14, y);
+  }
+  doc.save(filename);
+}
+
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 const Badge = ({ label, color }) => (
   <span style={{ background: color+"22", color, border: `1px solid ${color}44`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</span>
@@ -630,6 +657,54 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
     setEditingTargetDate(null);
   };
 
+  const exportBreakdownPDF = (b) => {
+    exportDetailPDF({
+      title: "BREAKDOWN REPORT",
+      subtitle: `${b.asset_name} — ${b.site||"—"}`,
+      fields: [
+        [t(lang,"assetName"), b.asset_name], [t(lang,"site"), b.site],
+        [t(lang,"severity"), b.severity], [t(lang,"status"), b.status],
+        [t(lang,"reportedBy"), b.reported_by], [t(lang,"date"), fmtDateTime(b.reported_at)],
+        [t(lang,"issue"), b.description],
+        [t(lang,"downtimeStarted"), fmtDateTime(b.downtime_start)], [t(lang,"backToOperation"), fmtDateTime(b.downtime_end)],
+        [t(lang,"totalDowntime"), formatDowntime(b.downtime_hours ? Math.round(b.downtime_hours*60) : (b.downtime_hours===0?0:null))],
+        [t(lang,"targetResolutionDate"), b.target_date?fmtDate(b.target_date):null],
+        [t(lang,"acknowledged"), b.acknowledged_by ? `${b.acknowledged_by} · ${fmtDateTime(b.acknowledged_at)}` : null],
+        [t(lang,"resolvedBy"), b.resolved_by ? `${b.resolved_by} · ${fmtDateTime(b.resolved_at)}` : null],
+        [t(lang,"maintenanceNotes"), b.maintenance_notes],
+        [t(lang,"approvedBy"), b.supervisor_approved_by ? `${b.supervisor_approved_by} · ${fmtDateTime(b.supervisor_approved_at)}` : null],
+        [t(lang,"confirmedBy"), b.operator_confirmed_by ? `${b.operator_confirmed_by} · ${fmtDateTime(b.operator_confirmed_at)}` : null],
+        [t(lang,"linkedWorkOrder"), b.work_order_id],
+      ],
+      tableTitle: t(lang,"updatesLog"),
+      tableHead: [t(lang,"date"), t(lang,"performedBy"), t(lang,"descriptionNotes")],
+      tableRows: (b.updates||[]).map(u => [fmtDateTime(u.at), u.by, u.note]),
+      filename: `Breakdown_${b.id}_${TODAY}.pdf`,
+    });
+  };
+
+  const exportIssuePDF = (issue) => {
+    exportDetailPDF({
+      title: "ISSUE REPORT",
+      subtitle: `${issue.asset_name} — ${issue.site||"—"}`,
+      fields: [
+        [t(lang,"assetName"), issue.asset_name], [t(lang,"site"), issue.site],
+        [t(lang,"severity"), issue.severity], [t(lang,"status"), issue.status],
+        [t(lang,"reportedBy"), issue.reported_by], [t(lang,"date"), fmtDateTime(issue.reported_at)],
+        [t(lang,"issue"), issue.description],
+        [t(lang,"acknowledged"), issue.acknowledged_by ? `${issue.acknowledged_by} · ${fmtDateTime(issue.acknowledged_at)}` : null],
+        [t(lang,"resolvedBy"), issue.resolved_by ? `${issue.resolved_by} · ${fmtDateTime(issue.resolved_at)}` : null],
+        [t(lang,"approvedBy"), issue.supervisor_approved_by ? `${issue.supervisor_approved_by} · ${fmtDateTime(issue.supervisor_approved_at)}` : null],
+        [t(lang,"confirmedBy"), issue.operator_confirmed_by ? `${issue.operator_confirmed_by} · ${fmtDateTime(issue.operator_confirmed_at)}` : null],
+        [t(lang,"linkedWorkOrder"), issue.work_order_id],
+      ],
+      tableTitle: t(lang,"updatesLog"),
+      tableHead: [t(lang,"date"), t(lang,"performedBy"), t(lang,"descriptionNotes")],
+      tableRows: (issue.updates||[]).map(u => [fmtDateTime(u.at), u.by, u.note]),
+      filename: `Issue_${issue.id}_${TODAY}.pdf`,
+    });
+  };
+
   // An asset can have at most one open (non-Resolved) breakdown or issue at a time.
   const openReportFor = (assetId) => {
     const b = breakdowns.find(x => x.asset_id === assetId && x.status !== "Resolved");
@@ -860,6 +935,7 @@ const onIssueReported = (record) => {
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <Badge label={b.severity} color={SEVERITY_COLORS[b.severity]||C.muted} />
                     <Badge label={b.status} color={statusColor(b.status)} />
+                    <button onClick={() => exportBreakdownPDF(b)} title={t(lang,"exportPDF")} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 13, padding: "4px 8px" }}>📄</button>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
@@ -940,6 +1016,7 @@ const onIssueReported = (record) => {
                       <Badge label={issue.severity} color={SEVERITY_COLORS[issue.severity]||C.muted} />
                       <Badge label={issue.status} color={statusColor(issue.status)} />
                       <div style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 4, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>RUNNING</div>
+                      <button onClick={() => exportIssuePDF(issue)} title={t(lang,"exportPDF")} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 13, padding: "4px 8px" }}>📄</button>
                     </div>
                   </div>
                   <div style={{ background: C.surface, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: C.subtle }}>
@@ -2618,6 +2695,29 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
     setSaving(false);
   };
 
+  const exportTicketPDF = () => {
+    exportDetailPDF({
+      title: "TICKET REPORT",
+      subtitle: `${ticket.title} — ${ticket.id}`,
+      fields: [
+        [t(lang,"title"), ticket.title], [t(lang,"category"), ticket.category],
+        [t(lang,"priority"), ticket.priority], [t(lang,"status"), ticket.status],
+        [t(lang,"site"), ticket.site], [t(lang,"specificLocation"), ticket.location_detail],
+        [t(lang,"linkedAssetOptional"), ticket.asset_name],
+        [t(lang,"requestedBy"), ticket.requested_by],
+        [t(lang,"assignee"), ticket.assignee], [t(lang,"vendor"), ticket.vendor],
+        [t(lang,"departments"), (ticket.departments||[]).join(", ")||null],
+        [t(lang,"targetCompletion"), ticket.target_date?fmtDate(ticket.target_date):null],
+        [t(lang,"linkedWorkOrder"), ticket.work_order_id],
+        [t(lang,"descriptionNotes"), ticket.description],
+      ],
+      tableTitle: t(lang,"ticketLog"),
+      tableHead: [t(lang,"date"), t(lang,"performedBy"), t(lang,"descriptionNotes")],
+      tableRows: events.map(ev => [fmtDateTime(ev.at), `${ev.by}${ev.department?` (${ev.department})`:""}`, ev.note||ev.event_type]),
+      filename: `Ticket_${ticket.id}_${TODAY}.pdf`,
+    });
+  };
+
   const saveAssignment = async () => {
     setSaving(true); setError(null);
     const assignee = assignTech === "— Unassigned —" ? null : assignTech;
@@ -2680,7 +2780,10 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
             <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{ticket.title}</div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{ticket.category||"—"} · {ticket.site||"—"}{ticket.location_detail?` · 📍 ${ticket.location_detail}`:""}{ticket.asset_name?` · ${ticket.asset_name}`:""}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportTicketPDF} title={t(lang,"exportPDF")} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 13, padding: "4px 8px" }}>📄</button>
+            <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+          </div>
         </div>
         <div style={{ padding: 24 }}>
           <ErrBanner msg={error} onDismiss={() => setError(null)} />
@@ -4621,6 +4724,97 @@ function MaintenanceCalendar({ workOrders, assets, lang }) {
   );
 }
 
+function ChecklistExecutionDetail({ execution, onClose, lang }) {
+  const [items, setItems] = useState([]);
+  const [responses, setResponses] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    const [itemsRes, respRes] = await Promise.all([
+      supabase.from("checklist_items").select("*").eq("checklist_id", execution.checklist_id).order("item_number"),
+      supabase.from("checklist_responses").select("*").eq("execution_id", execution.id),
+    ]);
+    const respMap = {}; (respRes.data||[]).forEach(r => { respMap[r.item_id] = r; });
+    setItems(itemsRes.data||[]);
+    setResponses(respMap);
+    setLoading(false);
+  };
+
+  const itemLabel = (item) => lang==="ar" ? (item.item_ar||item.item_en) : (item.item_en||item.item_ar);
+  const approverLine = execution.approval_status==="Approved"
+    ? `${execution.approved_by||"—"}${execution.approver_role?` (${execution.approver_role})`:""}`
+    : (execution.approval_status || t(lang,"pendingApproval"));
+
+  const exportPDF = () => {
+    exportDetailPDF({
+      title: "CHECKLIST REPORT",
+      subtitle: `${execution.asset_name} — ${execution.site||"—"}`,
+      fields: [
+        [t(lang,"assetName"), execution.asset_name], [t(lang,"site"), execution.site],
+        [t(lang,"category"), execution.category],
+        [t(lang,"date"), fmtDateTime(execution.created_at||execution.execution_date)],
+        [t(lang,"status"), execution.status],
+        [t(lang,"performedBy"), execution.executed_by ? `${execution.executed_by}${execution.performer_role?` (${execution.performer_role})`:""}` : null],
+        [t(lang,"approvedBy"), approverLine],
+      ],
+      tableTitle: t(lang,"checklistItems"),
+      tableHead: [t(lang,"item"), t(lang,"frequency"), t(lang,"result"), t(lang,"descriptionNotes")],
+      tableRows: items.map(it => [itemLabel(it), it.frequency_label||it.frequency||"—", responses[it.id]?.result||"—", responses[it.id]?.notes||""]),
+      filename: `Checklist_${(execution.asset_name||execution.id).replace(/\s+/g,"_")}_${TODAY}.pdf`,
+    });
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 720, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>✅ {execution.asset_name}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{execution.site||"—"} · {fmtDateTime(execution.created_at||execution.execution_date)}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportPDF} title={t(lang,"exportPDF")} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 13, padding: "4px 8px" }}>📄</button>
+            <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+          </div>
+        </div>
+        <div style={{ padding: 24 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16, fontSize: 12, color: C.muted }}>
+            <span>{t(lang,"performedBy")}: <strong style={{ color: C.text }}>{execution.executed_by||"—"}</strong>{execution.performer_role?` (${execution.performer_role})`:""}</span>
+            <span>{t(lang,"status")}: <strong style={{ color: C.text }}>{execution.status||"—"}</strong></span>
+            <span>{t(lang,"approvedBy")}: <strong style={{ color: execution.approval_status==="Approved"?C.green:C.muted }}>{approverLine}</strong></span>
+          </div>
+          {loading ? <Spinner lang={lang} /> : items.length===0 ? (
+            <div style={{ textAlign: "center", padding: 24, color: C.muted, fontSize: 13 }}>{t(lang,"noChecklistsFound")}</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  {[t(lang,"item"),t(lang,"frequency"),t(lang,"result"),t(lang,"descriptionNotes")].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {items.map((it,i) => {
+                    const r = responses[it.id];
+                    return (
+                      <tr key={it.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                        <td style={{ padding: "8px 10px", color: C.text }}>{CAT_ICONS[it.category]||""} {itemLabel(it)}</td>
+                        <td style={{ padding: "8px 10px", color: C.subtle }}>{it.frequency_label||it.frequency||"—"}</td>
+                        <td style={{ padding: "8px 10px" }}>{r?.result ? <Badge label={r.result} color={r.result==="PASS"?C.green:r.result==="FAIL"?C.red:C.muted} /> : <span style={{ color: C.muted }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: C.subtle }}>{r?.notes||"—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -4657,6 +4851,8 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const [checklistExecs, setChecklistExecs] = useState([]);
   const [checklistLoading, setChecklistLoading] = useState(true);
   const [checklistSiteFilter, setChecklistSiteFilter] = useState("All");
+  const [checklistCategoryFilter, setChecklistCategoryFilter] = useState("All");
+  const [viewingExecution, setViewingExecution] = useState(null);
 
   useEffect(() => { loadChecklistReport(); }, []);
   const loadChecklistReport = async () => {
@@ -4675,6 +4871,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
       return {
         ...e,
         site: asset?.location || null,
+        category: asset?.category || null,
         approval_status: log?.approval_status || null,
         approved_by: log?.approved_by || null,
         approved_at: log?.approved_at || null,
@@ -4686,7 +4883,9 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
     setChecklistLoading(false);
   };
 
-  const checklistExecsFiltered = checklistSiteFilter==="All" ? checklistExecs : checklistExecs.filter(e => e.site===checklistSiteFilter);
+  const checklistExecsFiltered = checklistExecs
+    .filter(e => checklistSiteFilter==="All" || e.site===checklistSiteFilter)
+    .filter(e => checklistCategoryFilter==="All" || e.category===checklistCategoryFilter);
   const checklistApprovalLabel = (e) => {
     if (!e.approval_status) return t(lang,"pendingApproval");
     if (e.approval_status==="Approved") return `${e.approved_by||"—"}${e.approver_role?` (${e.approver_role})`:""}`;
@@ -4697,7 +4896,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const exportChecklistPDF = () => {
     applyPlugin(jsPDF);
     const doc = new jsPDF();
-    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("CIL Checklist Compliance Report",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${checklistSiteFilter!=="All"?` · Site: ${checklistSiteFilter}`:""}`,14,26);
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("CIL Checklist Compliance Report",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${checklistSiteFilter!=="All"?` · Site: ${checklistSiteFilter}`:""}${checklistCategoryFilter!=="All"?` · Category: ${checklistCategoryFilter}`:""}`,14,26);
     doc.setTextColor(0,0,0);
     doc.autoTable({
       startY: 34,
@@ -4847,6 +5046,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
       </div>
 
       {/* Checklist compliance report */}
+      {viewingExecution && <ChecklistExecutionDetail execution={viewingExecution} onClose={() => setViewingExecution(null)} lang={lang} />}
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>✅ {t(lang,"checklistComplianceReport")}</div>
@@ -4854,6 +5054,10 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
             <select value={checklistSiteFilter} onChange={e => setChecklistSiteFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
               <option value="All">{t(lang,"all")} {t(lang,"site")}</option>
               {(sites||[]).filter(s => s !== "— Select Site —").map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={checklistCategoryFilter} onChange={e => setChecklistCategoryFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
+              {WO_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             <button onClick={exportChecklistPDF} disabled={checklistLoading || checklistExecsFiltered.length===0} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"exportPDF")}</button>
           </div>
@@ -4864,7 +5068,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {[t(lang,"assetName"),t(lang,"site"),t(lang,"date"),t(lang,"status"),t(lang,"performedBy"),t(lang,"approvedBy")].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+                {[t(lang,"assetName"),t(lang,"site"),t(lang,"date"),t(lang,"status"),t(lang,"performedBy"),t(lang,"approvedBy"),""].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {checklistExecsFiltered.slice(0,100).map((e,i) => (
@@ -4875,6 +5079,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
                     <td style={{ padding: "8px 10px" }}><Badge label={e.status||"—"} color={e.status==="Completed"?C.green:C.yellow} /></td>
                     <td style={{ padding: "8px 10px", color: C.subtle }}>{e.executed_by||"—"}</td>
                     <td style={{ padding: "8px 10px", color: e.approval_status==="Approved"?C.green:C.muted }}>{checklistApprovalLabel(e)}</td>
+                    <td style={{ padding: "8px 10px" }}><button onClick={() => setViewingExecution(e)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.accent, cursor: "pointer", fontSize: 11, padding: "4px 8px" }}>{t(lang,"view")}</button></td>
                   </tr>
                 ))}
               </tbody>
