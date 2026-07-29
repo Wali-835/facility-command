@@ -536,11 +536,11 @@ export default function AssetPage() {
   const submitLog = async () => {
     if (!logForm.title) { setError("Title is required."); return; }
     setSaving(true);
-    const needsApproval = userRole?.role === "maintenance";
-    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: logForm.log_type, title: logForm.title, description: logForm.description, performed_by: logForm.performed_by || userRole?.name, vendor: logForm.vendor==="— None —"?null:logForm.vendor||null, start_date: TODAY, end_date: TODAY, cost: logForm.cost ? parseFloat(logForm.cost) : null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString() };
+    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "supervisor";
+    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: logForm.log_type, title: logForm.title, description: logForm.description, performed_by: logForm.performed_by || userRole?.name, performer_role: userRole?.role||null, vendor: logForm.vendor==="— None —"?null:logForm.vendor||null, start_date: TODAY, end_date: TODAY, cost: logForm.cost ? parseFloat(logForm.cost) : null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString() };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else {
-      setSuccess(needsApproval ? "Log saved! Awaiting supervisor approval." : "Maintenance log added!");
+      setSuccess(needsApproval ? (userRole?.role === "supervisor" ? "Log saved! Awaiting engineer approval." : "Log saved! Awaiting supervisor approval.") : "Maintenance log added!");
       await loadLogs();
       setView("history");
       setLogForm({ log_type: "Corrective Repair", title: "", description: "", performed_by: "", cost: "", vendor: "" });
@@ -1003,7 +1003,7 @@ export default function AssetPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {logs.map(log => (
-                <HistoryCard key={log.id} log={log} isSupervisor={isSupervisor} onApprove={approveLog} onReject={rejectLog} />
+                <HistoryCard key={log.id} log={log} isSupervisor={isSupervisor} isEngineer={isEngineer} onApprove={approveLog} onReject={rejectLog} />
               ))}
             </div>
           )}
@@ -1122,7 +1122,7 @@ function WOCard({ wo, isMaintenance, isSupervisor, onUpdate, onRunChecklist }) {
 }
 
 // ─── HISTORY CARD ─────────────────────────────────────────────────────────────
-function HistoryCard({ log, isSupervisor, onApprove, onReject }) {
+function HistoryCard({ log, isSupervisor, isEngineer, onApprove, onReject }) {
   const [expanded, setExpanded] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
@@ -1152,8 +1152,8 @@ function HistoryCard({ log, isSupervisor, onApprove, onReject }) {
               ❌ Rejected: {log.rejection_notes}
             </div>
           )}
-          {/* Supervisor approval actions */}
-          {isSupervisor && log.approval_status === "Pending" && (
+          {/* Approval actions — a supervisor's own submission needs Engineer+ (never a fellow supervisor) */}
+          {(log.performer_role === "supervisor" ? isEngineer : isSupervisor) && log.approval_status === "Pending" && (
             <div style={{ marginTop: 12 }}>
               {!showReject ? (
                 <div style={{ display: "flex", gap: 8 }}>
@@ -1168,6 +1168,9 @@ function HistoryCard({ log, isSupervisor, onApprove, onReject }) {
                 </div>
               )}
             </div>
+          )}
+          {log.approval_status === "Pending" && log.performer_role === "supervisor" && !isEngineer && (
+            <div style={{ marginTop: 12, fontSize: 12, color: "#eab308" }}>⏳ Awaiting Engineer approval (self-assigned by a Supervisor).</div>
           )}
         </div>
       )}

@@ -626,7 +626,7 @@ function IssueOperatorConfirm({ issue, userRole, lang, onConfirmed }) {
 }
 
 // ─── BREAKDOWNS TAB ───────────────────────────────────────────────────────────
-function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, lang, setIssuesFromParent, isMaintenance, isSupervisor, isEngineer }) {
+function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkOrders, technicians, lang, setIssuesFromParent, isMaintenance, isSupervisor, isEngineer }) {
   const [breakdowns, setBreakdowns] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -642,7 +642,10 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
   const [updateTarget, setUpdateTarget] = useState(null); // { item, table }
   const [editingTargetDate, setEditingTargetDate] = useState(null); // breakdown id
   const [targetDateInput, setTargetDateInput] = useState("");
+  const [assigningItem, setAssigningItem] = useState(null); // { item, table }
+  const [assigneeInput, setAssigneeInput] = useState("");
   const canSetTargetDate = isSupervisor || isEngineer;
+  const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
 
   useEffect(() => { loadAll(); }, []);
 
@@ -655,6 +658,22 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
       setWorkOrders(prev => prev.map(w => w.id===b.work_order_id ? { ...w, due: targetDateInput||null } : w));
     }
     setEditingTargetDate(null);
+  };
+
+  const saveAssignment = async () => {
+    const { item, table } = assigningItem;
+    const assignee = assigneeInput === "— Unassigned —" ? null : assigneeInput || null;
+    const { error: err } = await supabase.from(table).update({ assignee }).eq("id", item.id);
+    if (err) { setError(err.message); return; }
+    const setter = table === "breakdown_reports" ? setBreakdowns : setIssues;
+    setter(prev => prev.map(x => x.id===item.id ? { ...x, assignee } : x));
+    if (table === "issue_reports" && setIssuesFromParent) setIssuesFromParent(prev => prev.map(x => x.id===item.id ? { ...x, assignee } : x));
+    if (item.work_order_id) {
+      await supabase.from("work_orders").update({ assignee }).eq("id", item.work_order_id);
+      setWorkOrders(prev => prev.map(w => w.id===item.work_order_id ? { ...w, assignee } : w));
+    }
+    if (assignee && assignee !== item.assignee) await notifyAssignee(assignee, `${t(lang,"assignedToWO")}: ${item.asset_name} — ${item.description?.slice(0,50)||""}`, item.work_order_id||item.id);
+    setAssigningItem(null);
   };
 
   const exportBreakdownPDF = (b) => {
@@ -725,14 +744,18 @@ function Breakdowns({ userRole, assets, setAssets, vendors, workOrders, setWorkO
     setLoading(false);
   };
 
-  const filtered = filter === "All" ? breakdowns : breakdowns.filter(b => b.status === filter);
-  const filteredIssues = filter === "All" ? issues : issues.filter(i => i.status === filter);
-  const openCount = breakdowns.filter(b => b.status === "Open").length;
-  const acknowledgedCount = breakdowns.filter(b => b.status === "Acknowledged").length;
-  const resolvedCount = breakdowns.filter(b => b.status === "Resolved").length;
-  const totalDowntimeMins = breakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0);
-  const openIssues = issues.filter(i => i.status === "Open").length;
-  const resolvedIssues = issues.filter(i => i.status === "Resolved").length;
+  // A plain maintenance user only sees breakdowns/issues assigned to them; everyone else sees all.
+  const myScopeOnly = userRole?.role === "maintenance";
+  const visibleBreakdowns = myScopeOnly ? breakdowns.filter(b => b.assignee === userRole.name) : breakdowns;
+  const visibleIssues = myScopeOnly ? issues.filter(i => i.assignee === userRole.name) : issues;
+  const filtered = filter === "All" ? visibleBreakdowns : visibleBreakdowns.filter(b => b.status === filter);
+  const filteredIssues = filter === "All" ? visibleIssues : visibleIssues.filter(i => i.status === filter);
+  const openCount = visibleBreakdowns.filter(b => b.status === "Open").length;
+  const acknowledgedCount = visibleBreakdowns.filter(b => b.status === "Acknowledged").length;
+  const resolvedCount = visibleBreakdowns.filter(b => b.status === "Resolved").length;
+  const totalDowntimeMins = visibleBreakdowns.filter(b => b.downtime_hours).reduce((s, b) => s + (b.downtime_hours || 0), 0);
+  const openIssues = visibleIssues.filter(i => i.status === "Open").length;
+  const resolvedIssues = visibleIssues.filter(i => i.status === "Resolved").length;
 
   const onReported = async (record) => {
     setBreakdowns(prev => [record, ...prev]);
@@ -822,6 +845,23 @@ const onIssueReported = (record) => {
             else setIssues(prev => { const next = prev.map(x => x.id===updated.id?updated:x); if (setIssuesFromParent) setIssuesFromParent(next); return next; });
           }} />
       )}
+      {assigningItem && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
+          <div style={{ background: C.card, border: `2px solid ${C.blue}44`, borderRadius: 12, width: "100%", maxWidth: 420 }}>
+            <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, background: C.blue+"11" }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: C.blue }}>👷 {t(lang,"assignTicket")}</div>
+              <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{assigningItem.item.asset_name}</div>
+            </div>
+            <div style={{ padding: 24 }}>
+              <Sel label={t(lang,"assignee")} value={assigneeInput} onChange={setAssigneeInput} options={technicianOptions} />
+              <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+                <Btn onClick={saveAssignment} color={C.blue}>{t(lang,"save")}</Btn>
+                <Btn variant="secondary" onClick={() => setAssigningItem(null)}>{t(lang,"cancel")}</Btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <OkBanner msg={success} onDismiss={() => setSuccess(null)} />
 
@@ -882,8 +922,8 @@ const onIssueReported = (record) => {
       {/* View Toggle */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setActiveView("breakdowns")} style={{ background: activeView==="breakdowns"?C.red:C.card, color: activeView==="breakdowns"?"#fff":C.muted, border: `1px solid ${activeView==="breakdowns"?C.red:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>🚨 {t(lang,"breakdowns")} ({breakdowns.filter(b=>b.status==="Open").length})</button>
-          <button onClick={() => setActiveView("issues")} style={{ background: activeView==="issues"?C.yellow:C.card, color: activeView==="issues"?"#fff":C.muted, border: `1px solid ${activeView==="issues"?C.yellow:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>⚠️ {t(lang,"issues")} ({issues.filter(i=>i.status==="Open").length})</button>
+          <button onClick={() => setActiveView("breakdowns")} style={{ background: activeView==="breakdowns"?C.red:C.card, color: activeView==="breakdowns"?"#fff":C.muted, border: `1px solid ${activeView==="breakdowns"?C.red:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>🚨 {t(lang,"breakdowns")} ({visibleBreakdowns.filter(b=>b.status==="Open").length})</button>
+          <button onClick={() => setActiveView("issues")} style={{ background: activeView==="issues"?C.yellow:C.card, color: activeView==="issues"?"#fff":C.muted, border: `1px solid ${activeView==="issues"?C.yellow:C.border}`, borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>⚠️ {t(lang,"issues")} ({visibleIssues.filter(i=>i.status==="Open").length})</button>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {["All","Open","Acknowledged","Pending Supervisor Approval","Pending Operator Confirmation","Resolved"].map(s => (
@@ -912,6 +952,10 @@ const onIssueReported = (record) => {
                       <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{b.asset_name}</div>
                     </div>
                     <div style={{ fontSize: 12, color: C.muted }}>{b.site} · {t(lang,"reportedBy")} {b.reported_by} · {fmtDateTime(b.reported_at)}</div>
+                    <div style={{ fontSize: 12, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ color: b.assignee?C.blue:C.muted }}>👷 {t(lang,"assignee")}: {b.assignee||t(lang,"unassigned")}</span>
+                      {isSupervisor && <button onClick={() => { setAssigningItem({ item: b, table: "breakdown_reports" }); setAssigneeInput(b.assignee||"— Unassigned —"); }} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11 }}>✏️</button>}
+                    </div>
                     {isAcknowledged && b.acknowledged_by && (
                       <div style={{ fontSize: 12, color: C.blue, marginTop: 4 }}>👁 {t(lang,"acknowledged")}: {b.acknowledged_by} · {fmtDateTime(b.acknowledged_at)}</div>
                     )}
@@ -1008,6 +1052,10 @@ const onIssueReported = (record) => {
                         <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{issue.asset_name}</div>
                       </div>
                       <div style={{ fontSize: 12, color: C.muted }}>{issue.site} · {t(lang,"reportedBy")} {issue.reported_by} · {fmtDateTime(issue.reported_at)}</div>
+                      <div style={{ fontSize: 12, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ color: issue.assignee?C.blue:C.muted }}>👷 {t(lang,"assignee")}: {issue.assignee||t(lang,"unassigned")}</span>
+                        {isSupervisor && <button onClick={() => { setAssigningItem({ item: issue, table: "issue_reports" }); setAssigneeInput(issue.assignee||"— Unassigned —"); }} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11 }}>✏️</button>}
+                      </div>
                       {isAcknowledged && issue.acknowledged_by && (
                         <div style={{ fontSize: 12, color: C.blue, marginTop: 4 }}>👁 {t(lang,"acknowledged")}: {issue.acknowledged_by}</div>
                       )}
@@ -1419,8 +1467,8 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRole?.role === "maintenance";
-    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null };
+    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "supervisor";
+    const record = { id: uid("LOG"), asset_id: asset.id, asset_name: asset.name, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, performer_role: userRole?.role||null, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval ? "In Progress" : "Completed", approval_status: needsApproval ? "Pending" : "Approved", approved_by: needsApproval ? null : userRole?.name, approved_at: needsApproval ? null : new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start && form.downtime_end) ? Math.round((new Date(form.downtime_end) - new Date(form.downtime_start)) / (1000 * 60 * 60)) : null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else { setSuccess(t(lang,"saving")); setLogs(prev => [record,...prev]); setForm({ log_type: "Preventive Maintenance", title: "", description: "", performed_by: "", vendor: "", start_date: TODAY, end_date: "", cost: "", status: "Completed", downtime_start: "", downtime_end: "" }); setShowForm(false); }
     setSaving(false);
@@ -1632,9 +1680,12 @@ function MaintenanceModal({ asset, onClose, isAdmin, isSupervisor, isMaintenance
                             </div>
                           ) : <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"noSpareParts")}</div>}
                         </div>
-                        {/* Approval section */}
-                        {log.approval_status === "Pending" && isSupervisor && (
+                        {/* Approval section — a supervisor's own submission needs Engineer+ (never a fellow supervisor) */}
+                        {log.approval_status === "Pending" && (log.performer_role === "supervisor" ? isEngineer : isSupervisor) && (
                           <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={(updated) => { setLogs(prev => prev.map(l => l.id===updated.id?updated:l)); loadLogs(); }} onRejected={(updated) => { setLogs(prev => prev.map(l => l.id===updated.id?updated:l)); loadLogs(); }} />
+                        )}
+                        {log.approval_status === "Pending" && log.performer_role === "supervisor" && !isEngineer && (
+                          <div style={{ marginTop: 12, fontSize: 12, color: C.yellow }}>⏳ {t(lang,"awaitingEngineerApproval")}</div>
                         )}
                         {log.approval_status === "Approved" && log.approved_by && (
                           <div style={{ marginTop: 12, background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.green }}>
@@ -1853,9 +1904,9 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
   const submitLog = async () => {
     if (!form.title) { setError(t(lang,"title")); return; }
     setSaving(true); setError(null);
-    const needsApproval = userRole?.role === "maintenance";
+    const needsApproval = userRole?.role === "maintenance" || userRole?.role === "supervisor";
     const asset = (assets||[]).find(a => a.name === wo.asset);
-    const record = { id: uid("LOG"), asset_id: asset?.id||null, asset_name: wo.asset, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval?"In Progress":"Completed", approval_status: needsApproval?"Pending":"Approved", approved_by: needsApproval?null:userRole?.name, approved_at: needsApproval?null:new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start&&form.downtime_end)?Math.round((new Date(form.downtime_end)-new Date(form.downtime_start))/(1000*60*60)):null };
+    const record = { id: uid("LOG"), asset_id: asset?.id||null, asset_name: wo.asset, log_type: form.log_type, title: form.title, description: form.description, performed_by: form.performed_by, performer_role: userRole?.role||null, vendor: form.vendor==="— None —"?null:form.vendor||null, start_date: form.start_date||null, end_date: form.end_date||null, cost: form.cost?parseFloat(form.cost):null, status: needsApproval?"In Progress":"Completed", approval_status: needsApproval?"Pending":"Approved", approved_by: needsApproval?null:userRole?.name, approved_at: needsApproval?null:new Date().toISOString(), downtime_start: form.downtime_start||null, downtime_end: form.downtime_end||null, downtime_hours: (form.downtime_start&&form.downtime_end)?Math.round((new Date(form.downtime_end)-new Date(form.downtime_start))/(1000*60*60)):null };
     const { error: err } = await supabase.from("maintenance_logs").insert([record]);
     if (err) { setError(err.message); } else {
       setLogs(prev => [record,...prev]);
@@ -2185,9 +2236,12 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
                         ) : <div style={{ fontSize: 12, color: C.muted }}>{t(lang,"noSpareParts")}</div>}
                       </div>
 
-                      {/* Approval */}
-                      {log.approval_status==="Pending" && isSupervisor && (
+                      {/* Approval — a supervisor's own submission needs Engineer+ (never a fellow supervisor) */}
+                      {log.approval_status==="Pending" && (log.performer_role === "supervisor" ? isEngineer : isSupervisor) && (
                         <ApprovalSection log={log} lang={lang} userRole={userRole} onApproved={(updated) => setLogs(prev => prev.map(l => l.id===updated.id?updated:l))} onRejected={(updated) => setLogs(prev => prev.map(l => l.id===updated.id?updated:l))} />
+                      )}
+                      {log.approval_status==="Pending" && log.performer_role === "supervisor" && !isEngineer && (
+                        <div style={{ marginTop: 12, fontSize: 12, color: C.yellow }}>⏳ {t(lang,"awaitingEngineerApproval")}</div>
                       )}
                       {log.approval_status==="Approved" && log.approved_by && (
                         <div style={{ marginTop: 12, background: C.green+"11", border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.green }}>
@@ -2252,8 +2306,11 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
     setForm(p => ({ ...p, asset: "", site: "" }));
   };
 
+  // A plain maintenance user only sees work orders assigned to them; everyone else sees all.
+  const visibleWorkOrders = userRole?.role === "maintenance" ? workOrders.filter(w => w.assignee === userRole.name) : workOrders;
+
   // Split active vs archived
-  const typeFiltered = workOrders.filter(w => woType === "pm" ? w.title.startsWith("PM -") : !w.title.startsWith("PM -"));
+  const typeFiltered = visibleWorkOrders.filter(w => woType === "pm" ? w.title.startsWith("PM -") : !w.title.startsWith("PM -"));
   const activeWOs = typeFiltered.filter(w => w.status !== "Completed");
   const archivedWOs = typeFiltered.filter(w => w.status === "Completed");
 
@@ -2281,7 +2338,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   const searchResults = (() => {
     if (!isSearching) return [];
     const q = search.trim().toLowerCase();
-    return workOrders
+    return visibleWorkOrders
       .filter(w => [w.id, w.title, w.asset, w.vendor, w.status_note, w.category, w.site, w.assignee]
         .filter(Boolean).some(v => String(v).toLowerCase().includes(q)))
       .filter(w => (siteFilter === "All" || w.site === siteFilter) && (catFilter === "All" || w.category === catFilter))
@@ -2305,10 +2362,10 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
   // Per-site KPIs
   const siteKPIs = sites.filter(s => s !== "— Select Site —").map(site => ({
     site,
-    open: workOrders.filter(w => w.site === site && w.status === "Open").length,
-    inProgress: workOrders.filter(w => w.site === site && w.status === "In Progress").length,
-    overdue: workOrders.filter(w => w.site === site && w.due && w.due <= TODAY && w.status !== "Completed").length,
-    total: workOrders.filter(w => w.site === site && w.status !== "Completed").length,
+    open: visibleWorkOrders.filter(w => w.site === site && w.status === "Open").length,
+    inProgress: visibleWorkOrders.filter(w => w.site === site && w.status === "In Progress").length,
+    overdue: visibleWorkOrders.filter(w => w.site === site && w.due && w.due <= TODAY && w.status !== "Completed").length,
+    total: visibleWorkOrders.filter(w => w.site === site && w.status !== "Completed").length,
   })).filter(s => s.total > 0);
 
   const submit = async () => {
@@ -2547,7 +2604,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
             <Input label={t(lang,"dueDate")} value={form.due} onChange={f("due")} type="date" />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
             <Sel label={t(lang,"vendor")} value={form.vendor} onChange={f("vendor")} options={vendorOptions} />
-            <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />
+            {isSupervisor && <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />}
             <Input label={t(lang,"targetCompletion")} value={form.target_date} onChange={f("target_date")} type="date" />
           </div>
           <div style={{ marginTop: 12 }}>
@@ -4852,6 +4909,9 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const [checklistLoading, setChecklistLoading] = useState(true);
   const [checklistSiteFilter, setChecklistSiteFilter] = useState("All");
   const [checklistCategoryFilter, setChecklistCategoryFilter] = useState("All");
+  const [checklistMonthFilter, setChecklistMonthFilter] = useState("All");
+  const [checklistSubcategoryFilter, setChecklistSubcategoryFilter] = useState("All");
+  const [checklistAssetFilter, setChecklistAssetFilter] = useState("All");
   const [viewingExecution, setViewingExecution] = useState(null);
 
   useEffect(() => { loadChecklistReport(); }, []);
@@ -4872,6 +4932,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
         ...e,
         site: asset?.location || null,
         category: asset?.category || null,
+        subcategory: asset?.subcategory || null,
         approval_status: log?.approval_status || null,
         approved_by: log?.approved_by || null,
         approved_at: log?.approved_at || null,
@@ -4885,7 +4946,13 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
 
   const checklistExecsFiltered = checklistExecs
     .filter(e => checklistSiteFilter==="All" || e.site===checklistSiteFilter)
-    .filter(e => checklistCategoryFilter==="All" || e.category===checklistCategoryFilter);
+    .filter(e => checklistCategoryFilter==="All" || e.category===checklistCategoryFilter)
+    .filter(e => checklistSubcategoryFilter==="All" || e.subcategory===checklistSubcategoryFilter)
+    .filter(e => checklistAssetFilter==="All" || e.asset_id===checklistAssetFilter)
+    .filter(e => checklistMonthFilter==="All" || `${e.year}-${String(e.month).padStart(2,"0")}`===checklistMonthFilter);
+  const checklistMonthOptions = [...new Set(checklistExecs.filter(e => e.year && e.month).map(e => `${e.year}-${String(e.month).padStart(2,"0")}`))].sort().reverse();
+  const checklistSubcategoryOptions = [...new Set(checklistExecs.map(e => e.subcategory).filter(Boolean))].sort();
+  const checklistAssetOptions = [...new Map(checklistExecs.filter(e => e.asset_id).map(e => [e.asset_id, e.asset_name])).entries()].sort((a,b) => (a[1]||"").localeCompare(b[1]||""));
   const checklistApprovalLabel = (e) => {
     if (!e.approval_status) return t(lang,"pendingApproval");
     if (e.approval_status==="Approved") return `${e.approved_by||"—"}${e.approver_role?` (${e.approver_role})`:""}`;
@@ -4896,7 +4963,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const exportChecklistPDF = () => {
     applyPlugin(jsPDF);
     const doc = new jsPDF();
-    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("CIL Checklist Compliance Report",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${checklistSiteFilter!=="All"?` · Site: ${checklistSiteFilter}`:""}${checklistCategoryFilter!=="All"?` · Category: ${checklistCategoryFilter}`:""}`,14,26);
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("CIL Checklist Compliance Report",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${checklistSiteFilter!=="All"?` · Site: ${checklistSiteFilter}`:""}${checklistCategoryFilter!=="All"?` · Category: ${checklistCategoryFilter}`:""}${checklistSubcategoryFilter!=="All"?` · Subcategory: ${checklistSubcategoryFilter}`:""}${checklistAssetFilter!=="All"?` · Asset: ${checklistAssetOptions.find(([id])=>id===checklistAssetFilter)?.[1]||""}`:""}${checklistMonthFilter!=="All"?` · Month: ${checklistMonthFilter}`:""}`,14,26);
     doc.setTextColor(0,0,0);
     doc.autoTable({
       startY: 34,
@@ -5058,6 +5125,18 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
             <select value={checklistCategoryFilter} onChange={e => setChecklistCategoryFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
               <option value="All">{t(lang,"all")} {t(lang,"category")}</option>
               {WO_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={checklistSubcategoryFilter} onChange={e => setChecklistSubcategoryFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"subcategory")}</option>
+              {checklistSubcategoryOptions.map(sc => <option key={sc} value={sc}>{sc}</option>)}
+            </select>
+            <select value={checklistAssetFilter} onChange={e => setChecklistAssetFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"asset")}</option>
+              {checklistAssetOptions.map(([id,name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+            <select value={checklistMonthFilter} onChange={e => setChecklistMonthFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"month")}</option>
+              {checklistMonthOptions.map(m => <option key={m} value={m}>{new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</option>)}
             </select>
             <button onClick={exportChecklistPDF} disabled={checklistLoading || checklistExecsFiltered.length===0} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"exportPDF")}</button>
           </div>
@@ -6440,7 +6519,7 @@ export default function App() {
         {activeTab===t(lang,"overview") && <Overview workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
-        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
+        {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} technicians={technicians} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
         {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} setWorkOrders={setWorkOrders} vendors={vendors} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"insurance") && isEngineer && <InsuranceManagement assets={assets} isAdmin={isAdmin} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"purchaseOrders") && isEngineer && <PurchaseOrders assets={assets} isAdmin={isAdmin} lang={lang} />}
