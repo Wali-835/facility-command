@@ -4016,7 +4016,7 @@ const filtered = assets.filter(a =>
                     {a.asset_code && <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, fontFamily: "monospace", marginTop: 2 }}>{a.asset_code}</div>}
                     <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{a.category}{a.subcategory?` · ${a.subcategory}`:""}</div>
                   </div>
-                  <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} />
+                  {isSupervisor ? <StatusSel value={a.status} options={["Operational","Under Maintenance","Degraded"]} onChange={val => updateStatus(a.id,val)} /> : <Badge label={a.status} color={statusColor(a.status)} />}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, marginBottom: 14 }}>
                   {[[t(lang,"assetCode"),a.asset_code||"—"],[t(lang,"subcategory"),a.subcategory||"—"],[t(lang,"site"),a.location],[t(lang,"owner"),a.owner||"—"],[t(lang,"brand"),a.brand||"—"],[t(lang,"model"),a.model||"—"],[t(lang,"serialNumber"),a.serial_number||"—"],[t(lang,"value"),a.value||"—"],[t(lang,"pmEvery"),a.pm_frequency?`${a.pm_frequency} mo.`:"—"],[t(lang,"lastPM"),a.last_pm_date?fmtDate(a.last_pm_date):t(lang,"never")],[t(lang,"manufactureDate"),a.manufacture_date?fmtDate(a.manufacture_date):"—"],[t(lang,"invoiceNumber"),a.invoice_number||"—"],[t(lang,"poNumber"),a.po_number||"—"],[t(lang,"purchaseDate"),a.purchase_date?fmtDate(a.purchase_date):"—"]].map(([lbl,val]) => (
@@ -4037,7 +4037,7 @@ const filtered = assets.filter(a =>
                 )}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"logChecklist")}</button>
-                  <button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"qrCode")}</button>
+                  {isSupervisor && <button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"qrCode")}</button>}
                   {isMaintenance && <button onClick={() => setDocsAsset(a)} style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"documents")}</button>}
                   {isEngineer && <button onClick={() => setInsuranceAsset(a)} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🛡️ {t(lang,"insurance")}</button>}
                   {isAdmin && <><Btn small onClick={() => setEditItem(a)} color={C.accent}>{t(lang,"edit")}</Btn><Btn small variant="danger" onClick={() => setDeleteItem(a)}>{t(lang,"del")}</Btn></>}
