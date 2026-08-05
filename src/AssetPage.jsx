@@ -613,9 +613,20 @@ export default function AssetPage() {
   const vendorOptions = ["— None —", ...vendors.map(v => v.name)];
   const openBreakdowns = breakdowns.filter(b => b.status !== "Resolved");
   const openIssues = issues.filter(i => i.status !== "Resolved");
-  // This asset can have at most one open breakdown or issue at a time.
+  // This asset can have at most one open breakdown or issue at a time — checked against
+  // the full (unscoped) list so a maintenance user can't file a duplicate of something
+  // assigned to someone else.
   const firstOpenReport = openBreakdowns.length ? { item: openBreakdowns[0], table: "breakdown_reports" } : openIssues.length ? { item: openIssues[0], table: "issue_reports" } : null;
   const activeWOs = workOrders.filter(w => w.status !== "Completed");
+
+  // A plain "maintenance" user only sees work orders/breakdowns/issues assigned to them.
+  const scopeToMe = userRole?.role === "maintenance";
+  const visibleBreakdowns = scopeToMe ? breakdowns.filter(b => b.assignee === userRole.name) : breakdowns;
+  const visibleIssues = scopeToMe ? issues.filter(i => i.assignee === userRole.name) : issues;
+  const visibleWorkOrders = scopeToMe ? workOrders.filter(w => w.assignee === userRole.name) : workOrders;
+  const openVisibleBreakdowns = visibleBreakdowns.filter(b => b.status !== "Resolved");
+  const openVisibleIssues = visibleIssues.filter(i => i.status !== "Resolved");
+  const activeVisibleWOs = visibleWorkOrders.filter(w => w.status !== "Completed");
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "Arial, sans-serif", color: C.text, maxWidth: 520, margin: "0 auto", padding: 16 }}>
@@ -668,7 +679,7 @@ export default function AssetPage() {
           {/* Quick Stats for maintenance+ */}
           {isMaintenance && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
-              {[["🚨", openBreakdowns.length, "Breakdowns", C.red],["⚠️", openIssues.length, "Issues", C.yellow],["📋", activeWOs.length, "Work Orders", C.blue]].map(([icon,val,label,color]) => (
+              {[["🚨", openVisibleBreakdowns.length, "Breakdowns", C.red],["⚠️", openVisibleIssues.length, "Issues", C.yellow],["📋", activeVisibleWOs.length, "Work Orders", C.blue]].map(([icon,val,label,color]) => (
                 <div key={label} onClick={() => { loadBreakdownsAndIssues(); setView(label==="Breakdowns"?"breakdowns":label==="Issues"?"issues":"workorders"); }} style={{ background: C.card, border: `1px solid ${color}33`, borderRadius: 10, padding: "12px 8px", textAlign: "center", cursor: "pointer" }}>
                   <div style={{ fontSize: 20 }}>{icon}</div>
                   <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "monospace" }}>{val}</div>
@@ -777,10 +788,10 @@ export default function AssetPage() {
           {loadingBreakdowns ? <div style={{ textAlign: "center", color: C.muted, padding: 20 }}>Loading...</div> : (
             <>
               {/* Breakdowns */}
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 10 }}>🚨 Breakdowns ({openBreakdowns.length} open)</div>
-              {breakdowns.length === 0 ? <div style={{ color: C.muted, fontSize: 13, marginBottom: 16 }}>No breakdowns.</div> : (
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 10 }}>🚨 Breakdowns ({openVisibleBreakdowns.length} open)</div>
+              {visibleBreakdowns.length === 0 ? <div style={{ color: C.muted, fontSize: 13, marginBottom: 16 }}>No breakdowns.</div> : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
-                  {breakdowns.map(b => (
+                  {visibleBreakdowns.map(b => (
                     <div key={b.id} style={{ background: C.card, border: `1px solid ${b.status==="Resolved"?C.green+"44":C.red+"44"}`, borderRadius: 10, padding: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                         <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{b.asset_name}</div>
@@ -829,10 +840,10 @@ export default function AssetPage() {
               )}
 
               {/* Issues */}
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.yellow, marginBottom: 10 }}>⚠️ Issues ({openIssues.length} open)</div>
-              {issues.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No issues.</div> : (
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.yellow, marginBottom: 10 }}>⚠️ Issues ({openVisibleIssues.length} open)</div>
+              {visibleIssues.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No issues.</div> : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {issues.map(i => (
+                  {visibleIssues.map(i => (
                     <div key={i.id} style={{ background: C.card, border: `1px solid ${i.status==="Resolved"?C.green+"44":C.yellow+"44"}`, borderRadius: 10, padding: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                         <Badge label={i.severity} color={SEVERITY_COLORS[i.severity]||C.muted} />
@@ -892,11 +903,11 @@ export default function AssetPage() {
       ) : view === "workorders" ? (
         <div>
           <SectionHeader title="📋 Work Orders" onBack={() => setView("home")} />
-          {loadingBreakdowns ? <div style={{ textAlign: "center", color: C.muted, padding: 20 }}>Loading...</div> : workOrders.length === 0 ? (
+          {loadingBreakdowns ? <div style={{ textAlign: "center", color: C.muted, padding: 20 }}>Loading...</div> : visibleWorkOrders.length === 0 ? (
             <div style={{ textAlign: "center", color: C.muted, padding: 40 }}>No work orders for this asset.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {workOrders.map(wo => (
+              {visibleWorkOrders.map(wo => (
                 <WOCard key={wo.id} wo={wo} isMaintenance={isMaintenance} isSupervisor={isSupervisor} onUpdate={updateWOStatus} onRunChecklist={w => { setChecklistWO(w); setView("checklist"); }} />
               ))}
             </div>
