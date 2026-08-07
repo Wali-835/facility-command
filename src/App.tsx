@@ -3022,7 +3022,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
   };
 
   const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
-  const assetOptions = ["— None —", ...(assets||[]).map(a => a.name)];
+  const assetOptions = ["— None —", ...(assets||[]).filter(a => !form.site || form.site==="— Select Site —" || a.location===form.site).map(a => a.name)];
   const woOptions = ["— None —", ...(workOrders||[]).filter(w => w.status !== "Completed").map(w => w.id)];
   const activeLayout = layouts.find(l => l.site === form.site);
   const activeLayoutPoints = activeLayout ? layoutPoints.filter(p => p.site_layout_id === activeLayout.id) : [];
@@ -3081,7 +3081,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
             <Input label={t(lang,"title")} value={form.title} onChange={f("title")} />
             <Sel label={t(lang,"category")} value={form.category} onChange={f("category")} options={WO_CATEGORIES} />
             <Sel label={t(lang,"priority")} value={form.priority} onChange={f("priority")} options={["Critical","High","Medium","Low"]} />
-            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={v => { f("site")(v); f("location_detail")(""); }} options={sites} />
+            <Sel label={t(lang,"site")} value={form.site||"— Select Site —"} onChange={v => { f("site")(v); f("location_detail")(""); if (v!==form.site) f("asset")(""); }} options={sites} />
             <Sel label={t(lang,"linkedAssetOptional")} value={form.asset||"— None —"} onChange={f("asset")} options={assetOptions} />
             <Sel label={t(lang,"linkedWorkOrderOptional")} value={form.work_order_id||"— None —"} onChange={f("work_order_id")} options={woOptions} />
             {isMaintenance && <Sel label={t(lang,"assignee")} value={form.assignee||"— Unassigned —"} onChange={f("assignee")} options={technicianOptions} />}
