@@ -876,6 +876,11 @@ const onIssueReported = (record) => {
       </div>
 
       {/* Report Buttons */}
+      {userRole?.can_report_breakdowns === false ? (
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20, fontSize: 13, color: C.muted }}>
+          🚫 {t(lang,"noBreakdownReportPermission")}
+        </div>
+      ) : (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
         <div style={{ background: C.card, border: `1px solid ${C.red}33`, borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 8 }}>🚨 {t(lang,"reportEquipmentBreakdown")}</div>
@@ -918,6 +923,7 @@ const onIssueReported = (record) => {
           )}
         </div>
       </div>
+      )}
 
       {/* View Toggle */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
@@ -3071,10 +3077,15 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
             </select>
           )}
         </div>
-        <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newTicket")}</Btn>
+        {userRole?.can_open_tickets !== false && <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newTicket")}</Btn>}
       </div>
+      {userRole?.can_open_tickets === false && (
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 18, fontSize: 13, color: C.muted }}>
+          🚫 {t(lang,"noTicketPermission")}
+        </div>
+      )}
 
-      {showForm && (
+      {showForm && userRole?.can_open_tickets !== false && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
           <div style={{ color: C.accent, fontWeight: 700, marginBottom: 14, fontSize: 13, textTransform: "uppercase" }}>{t(lang,"newTicket")}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
@@ -3818,6 +3829,7 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
   const [error, setError] = useState(null); const [editItem, setEditItem] = useState(null);
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
   const [docsAsset, setDocsAsset] = useState(null); const [insuranceAsset, setInsuranceAsset] = useState(null);
+  const [printingHistoryId, setPrintingHistoryId] = useState(null);
   const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [subcatFilter, setSubcatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
   useEffect(() => {
@@ -3875,6 +3887,51 @@ const filtered = assets.filter(a =>
   };
 
   const updateStatus = async (id,val) => { await supabase.from("assets").update({ status: val }).eq("id",id); setAssets(prev => prev.map(a => a.id===id?{...a,status:val}:a)); };
+
+  const printAssetHistory = async (asset) => {
+    setPrintingHistoryId(asset.id);
+    const [logsRes, brkRes, issRes, chkRes, woRes] = await Promise.all([
+      supabase.from("maintenance_logs").select("*").eq("asset_id", asset.id).order("start_date", { ascending: false }),
+      supabase.from("breakdown_reports").select("*").eq("asset_id", asset.id).order("reported_at", { ascending: false }),
+      supabase.from("issue_reports").select("*").eq("asset_id", asset.id).order("reported_at", { ascending: false }),
+      supabase.from("checklist_executions").select("*").eq("asset_id", asset.id).order("execution_date", { ascending: false }),
+      supabase.from("work_orders").select("*").eq("asset_id", asset.id).order("start_date", { ascending: false }),
+    ]);
+    applyPlugin(jsPDF);
+    const doc = new jsPDF();
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text(`${t(lang,"equipmentHistory")} — ${asset.name}`,14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}`,14,26);
+    doc.setTextColor(0,0,0); doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.text(t(lang,"assetDetails")||"Asset Details",14,38);
+    doc.autoTable({ startY: 42, head: [[t(lang,"field"),t(lang,"details")]], body: [
+      [t(lang,"assetCode"), asset.asset_code||"—"],
+      [t(lang,"category"), `${asset.category||"—"}${asset.subcategory?` / ${asset.subcategory}`:""}`],
+      [t(lang,"site"), asset.location||"—"],
+      [t(lang,"status"), asset.status||"—"],
+      [t(lang,"brand"), asset.brand||"—"],
+      [t(lang,"model"), asset.model||"—"],
+      [t(lang,"serialNumber"), asset.serial_number||"—"],
+      [t(lang,"pmEvery"), asset.pm_frequency?`${asset.pm_frequency} mo.`:"—"],
+      [t(lang,"lastPM"), asset.last_pm_date?fmtDate(asset.last_pm_date):t(lang,"never")],
+    ], headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 9 } });
+
+    doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text(`${t(lang,"maintenanceLogs")} (${(logsRes.data||[]).length})`,14,20);
+    doc.autoTable({ startY: 24, head: [[t(lang,"date"),t(lang,"logType")||"Type",t(lang,"title"),t(lang,"performedBy"),t(lang,"status"),t(lang,"cost")||"Cost"]], body: (logsRes.data||[]).map(l => [l.start_date?fmtDate(l.start_date):"—", l.log_type||"—", l.title||"—", l.performed_by||"—", l.status||"—", l.cost?`${l.cost}`:"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 } });
+
+    doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text(`${t(lang,"breakdowns")} (${(brkRes.data||[]).length})`,14,20);
+    doc.autoTable({ startY: 24, head: [[t(lang,"date"),t(lang,"severity"),t(lang,"status"),t(lang,"reportedBy"),t(lang,"totalDowntime"),t(lang,"issue")]], body: (brkRes.data||[]).map(b => [fmtDateTime(b.reported_at), b.severity||"—", b.status||"—", b.reported_by||"—", b.downtime_hours!=null?`${b.downtime_hours}h`:"—", b.description||"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 } });
+
+    doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text(`${t(lang,"issues")} (${(issRes.data||[]).length})`,14,20);
+    doc.autoTable({ startY: 24, head: [[t(lang,"date"),t(lang,"severity"),t(lang,"status"),t(lang,"reportedBy"),t(lang,"issue")]], body: (issRes.data||[]).map(i => [fmtDateTime(i.reported_at), i.severity||"—", i.status||"—", i.reported_by||"—", i.description||"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 } });
+
+    doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text(`${t(lang,"checklists")} (${(chkRes.data||[]).length})`,14,20);
+    doc.autoTable({ startY: 24, head: [[t(lang,"date"),t(lang,"status"),t(lang,"performedBy")]], body: (chkRes.data||[]).map(c => [fmtDateTime(c.created_at||c.execution_date), c.status||"—", c.executed_by||"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 } });
+
+    doc.addPage(); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text(`${t(lang,"workOrders")} (${(woRes.data||[]).length})`,14,20);
+    doc.autoTable({ startY: 24, head: [[t(lang,"title"),t(lang,"priority"),t(lang,"status"),t(lang,"assignee"),t(lang,"due")]], body: (woRes.data||[]).map(w => [w.title||"—", w.priority||"—", w.status||"—", w.assignee||"—", w.due?fmtDate(w.due):"—"]), headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 } });
+
+    doc.save(`Equipment_History_${asset.asset_code||asset.id}_${TODAY}.pdf`);
+    setPrintingHistoryId(null);
+  };
+
   const generateTransferForm = (asset, oldLocation, newLocation) => {
     applyPlugin(jsPDF);
     const doc = new jsPDF();
@@ -4039,6 +4096,7 @@ const filtered = assets.filter(a =>
                   <button onClick={() => setSelectedAsset(a)} style={{ flex: 1, background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"logChecklist")}</button>
                   {isSupervisor && <button onClick={() => generateQR(a)} style={{ background: C.purple+"22", color: "#a855f7", border: `1px solid #a855f744`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t(lang,"qrCode")}</button>}
                   {isMaintenance && <button onClick={() => setDocsAsset(a)} style={{ background: C.green+"22", color: C.green, border: `1px solid ${C.green}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"documents")}</button>}
+                  {isMaintenance && <button onClick={() => printAssetHistory(a)} disabled={printingHistoryId===a.id} style={{ background: C.blue+"22", color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: printingHistoryId===a.id?"default":"pointer", opacity: printingHistoryId===a.id?0.6:1 }}>🖨️ {t(lang,"equipmentHistory")}</button>}
                   {isEngineer && <button onClick={() => setInsuranceAsset(a)} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🛡️ {t(lang,"insurance")}</button>}
                   {isAdmin && <><Btn small onClick={() => setEditItem(a)} color={C.accent}>{t(lang,"edit")}</Btn><Btn small variant="danger" onClick={() => setDeleteItem(a)}>{t(lang,"del")}</Btn></>}
                 </div>
@@ -4974,6 +5032,43 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
     doc.save(`Checklist_Compliance_${TODAY}.pdf`);
   };
 
+  const [ticketsReport, setTicketsReport] = useState([]);
+  const [ticketsReportLoading, setTicketsReportLoading] = useState(true);
+  const [ticketSiteFilter, setTicketSiteFilter] = useState("All");
+  const [ticketDeptFilter, setTicketDeptFilter] = useState("All");
+  const [ticketStatusFilter, setTicketStatusFilter] = useState("Active");
+  const [ticketMonthFilter, setTicketMonthFilter] = useState("All");
+
+  useEffect(() => { loadTicketsReport(); }, []);
+  const loadTicketsReport = async () => {
+    setTicketsReportLoading(true);
+    const { data } = await supabase.from("tickets").select("*").order("requested_at", { ascending: false }).limit(300);
+    setTicketsReport(data||[]);
+    setTicketsReportLoading(false);
+  };
+
+  const ticketDeptOptions = [...new Set(ticketsReport.flatMap(tk => tk.departments||[]))].sort();
+  const ticketMonthOptions = [...new Set(ticketsReport.map(tk => (tk.requested_at||"").slice(0,7)).filter(Boolean))].sort().reverse();
+  const ticketsReportFiltered = ticketsReport
+    .filter(tk => ticketSiteFilter==="All" || tk.site===ticketSiteFilter)
+    .filter(tk => ticketDeptFilter==="All" || (tk.departments||[]).includes(ticketDeptFilter))
+    .filter(tk => ticketStatusFilter==="All" ? true : ticketStatusFilter==="Active" ? !ARCHIVED_TICKET_STATUSES.includes(tk.status) : ticketStatusFilter==="Archived" ? ARCHIVED_TICKET_STATUSES.includes(tk.status) : tk.status===ticketStatusFilter)
+    .filter(tk => ticketMonthFilter==="All" || (tk.requested_at||"").slice(0,7)===ticketMonthFilter);
+
+  const exportTicketsReportPDF = () => {
+    applyPlugin(jsPDF);
+    const doc = new jsPDF();
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("Tickets Report",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${ticketSiteFilter!=="All"?` · Site: ${ticketSiteFilter}`:""}${ticketDeptFilter!=="All"?` · Dept: ${ticketDeptFilter}`:""}${ticketStatusFilter!=="All"?` · Status: ${ticketStatusFilter}`:""}${ticketMonthFilter!=="All"?` · Month: ${ticketMonthFilter}`:""}`,14,26);
+    doc.setTextColor(0,0,0);
+    doc.autoTable({
+      startY: 34,
+      head: [["Title","Site","Category","Priority","Status","Requested By","Assignee","Date"]],
+      body: ticketsReportFiltered.map(tk => [tk.title||"—", tk.site||"—", tk.category||"—", tk.priority||"—", tk.status||"—", tk.requested_by||"—", tk.assignee||"—", tk.requested_at?fmtDate(tk.requested_at):"—"]),
+      headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 },
+    });
+    doc.save(`Tickets_Report_${TODAY}.pdf`);
+  };
+
   const assetOf = (name) => assets.find(a => a.name === name);
   const matchesFilter = (site, category) => (reportSite==="All"||site===reportSite) && (reportCategory==="All"||category===reportCategory);
   const isFiltered = reportSite!=="All" || reportCategory!=="All";
@@ -5159,6 +5254,60 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
                     <td style={{ padding: "8px 10px", color: C.subtle }}>{e.executed_by||"—"}</td>
                     <td style={{ padding: "8px 10px", color: e.approval_status==="Approved"?C.green:C.muted }}>{checklistApprovalLabel(e)}</td>
                     <td style={{ padding: "8px 10px" }}><button onClick={() => setViewingExecution(e)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.accent, cursor: "pointer", fontSize: 11, padding: "4px 8px" }}>{t(lang,"view")}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Tickets report */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>🎫 {t(lang,"ticketsReport")}</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={ticketSiteFilter} onChange={e => setTicketSiteFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"site")}</option>
+              {(sites||[]).filter(s => s !== "— Select Site —").map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {ticketDeptOptions.length>0 && (
+              <select value={ticketDeptFilter} onChange={e => setTicketDeptFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+                <option value="All">{t(lang,"all")} {t(lang,"departments")}</option>
+                {ticketDeptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            )}
+            <select value={ticketStatusFilter} onChange={e => setTicketStatusFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="Active">{t(lang,"activeFilter")}</option>
+              <option value="Archived">{t(lang,"archived")}</option>
+              <option value="All">{t(lang,"all")}</option>
+              {TICKET_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={ticketMonthFilter} onChange={e => setTicketMonthFilter(e.target.value)} style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+              <option value="All">{t(lang,"all")} {t(lang,"month")}</option>
+              {ticketMonthOptions.map(m => <option key={m} value={m}>{new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</option>)}
+            </select>
+            <button onClick={exportTicketsReportPDF} disabled={ticketsReportLoading || ticketsReportFiltered.length===0} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"exportPDF")}</button>
+          </div>
+        </div>
+        {ticketsReportLoading ? <Spinner lang={lang} /> : ticketsReportFiltered.length===0 ? (
+          <div style={{ textAlign: "center", padding: 24, color: C.muted, fontSize: 13 }}>{t(lang,"noTicketsFound")}</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {[t(lang,"title"),t(lang,"site"),t(lang,"category"),t(lang,"priority"),t(lang,"status"),t(lang,"assignee"),t(lang,"date")].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {ticketsReportFiltered.slice(0,100).map((tk,i) => (
+                  <tr key={tk.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                    <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{tk.title||"—"}</td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{tk.site||"—"}</td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{tk.category||"—"}</td>
+                    <td style={{ padding: "8px 10px" }}><Badge label={tk.priority||"—"} color={SEVERITY_COLORS[tk.priority]||C.muted} /></td>
+                    <td style={{ padding: "8px 10px" }}><Badge label={tk.status||"—"} color={statusColor(tk.status)} /></td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{tk.assignee||"—"}</td>
+                    <td style={{ padding: "8px 10px", color: C.subtle }}>{tk.requested_at?fmtDate(tk.requested_at):"—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -5985,9 +6134,9 @@ function PendingApprovals({ userRole, isAdmin, lang, assets, vendors, onJumpToBr
 function UserManagement({ lang, sites }) {
   const [users, setUsers] = useState([]); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [saving, setSaving] = useState(false); const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const [identifierType, setIdentifierType] = useState("email"); // "email" | "phone"
-  const [form, setForm] = useState({ email: "", phone: "", password: "", name: "", role: "operations", site: "", department: "", supervised_sites: [], supervised_categories: [] });
+  const [form, setForm] = useState({ email: "", phone: "", password: "", name: "", role: "operations", site: "", department: "", supervised_sites: [], supervised_categories: [], can_report_breakdowns: true, can_open_tickets: true });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
-  const resetForm = () => { setForm({ email: "", phone: "", password: "", name: "", role: "operations", site: "", department: "", supervised_sites: [], supervised_categories: [] }); setIdentifierType("email"); };
+  const resetForm = () => { setForm({ email: "", phone: "", password: "", name: "", role: "operations", site: "", department: "", supervised_sites: [], supervised_categories: [], can_report_breakdowns: true, can_open_tickets: true }); setIdentifierType("email"); };
 
   useEffect(() => { loadUsers(); }, []);
   const loadUsers = async () => { setLoading(true); const { data } = await supabase.from("user_roles").select("*").order("name"); setUsers(data||[]); setLoading(false); };
@@ -6014,6 +6163,7 @@ function UserManagement({ lang, sites }) {
             password: form.password, name: form.name, role: form.role, site: form.site || null,
             department: form.department || null,
             supervised_sites: scopedSites, supervised_categories: scopedCategories,
+            can_report_breakdowns: form.can_report_breakdowns, can_open_tickets: form.can_open_tickets,
           }),
         });
         const result = await res.json();
@@ -6025,9 +6175,9 @@ function UserManagement({ lang, sites }) {
       if (identifierType === "phone") {
         const existing = users.find(u => u.phone === form.phone);
         if (!existing) { setError(t(lang,"noAccountForPhone")); setSaving(false); return; }
-        record = { ...existing, name: form.name, role: form.role, site: form.site||null, department: form.department||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+        record = { ...existing, name: form.name, role: form.role, site: form.site||null, department: form.department||null, supervised_sites: scopedSites, supervised_categories: scopedCategories, can_report_breakdowns: form.can_report_breakdowns, can_open_tickets: form.can_open_tickets };
       } else {
-        record = { id: uid("USR"), email: form.email, phone: form.phone||null, name: form.name, role: form.role, site: form.site||null, department: form.department||null, supervised_sites: scopedSites, supervised_categories: scopedCategories };
+        record = { id: uid("USR"), email: form.email, phone: form.phone||null, name: form.name, role: form.role, site: form.site||null, department: form.department||null, supervised_sites: scopedSites, supervised_categories: scopedCategories, can_report_breakdowns: form.can_report_breakdowns, can_open_tickets: form.can_open_tickets };
       }
       const { error: err } = await supabase.from("user_roles").upsert([record], { onConflict: "email" });
       if (err) { setError(err.message); setSaving(false); return; }
@@ -6036,6 +6186,11 @@ function UserManagement({ lang, sites }) {
     setSaving(false);
   };
   const deleteUser = async (id) => { await supabase.from("user_roles").delete().eq("id",id); setUsers(prev => prev.filter(u => u.id!==id)); };
+  const startEdit = (u) => {
+    setForm({ email: u.email||"", phone: u.phone||"", password: "", name: u.name||"", role: u.role||"operations", site: u.site||"", department: u.department||"", supervised_sites: u.supervised_sites||[], supervised_categories: u.supervised_categories||[], can_report_breakdowns: u.can_report_breakdowns !== false, can_open_tickets: u.can_open_tickets !== false });
+    setIdentifierType(u.phone ? "phone" : "email");
+    setShowForm(true);
+  };
   const roleColor = (r) => ({ admin: C.accent, maintenance: C.blue, engineer: C.purple, supervisor: C.purple, operations: C.green, requester: C.yellow }[r]||C.muted);
   const roleIcon = (r) => ({ admin: "★", maintenance: "🔧", engineer: "🛠", supervisor: "👁", operations: "🏭", requester: "🧑‍💼" }[r]||"👤");
 
@@ -6084,6 +6239,16 @@ function UserManagement({ lang, sites }) {
           <div style={{ marginTop: 12 }}>
             <Input label={t(lang,"password")} value={form.password} onChange={f("password")} type="password" />
             <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{t(lang,"newAccountPasswordHint")}</div>
+          </div>
+          <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.subtle, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.can_report_breakdowns} onChange={e => f("can_report_breakdowns")(e.target.checked)} />
+              {t(lang,"canReportBreakdowns")}
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.subtle, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.can_open_tickets} onChange={e => f("can_open_tickets")(e.target.checked)} />
+              {t(lang,"canOpenTickets")}
+            </label>
           </div>
           {form.role === "supervisor" && (
             <div style={{ marginTop: 14, background: C.surface, border: `1px solid ${C.purple}33`, borderRadius: 8, padding: 14 }}>
@@ -6141,7 +6306,14 @@ function UserManagement({ lang, sites }) {
                   {u.supervised_categories?.length ? `🔧 ${u.supervised_categories.join(", ")}` : `🔧 ${t(lang,"allCategoriesScope")}`}
                 </div>
               )}
-              <Btn small variant="danger" onClick={() => deleteUser(u.id)}>{t(lang,"remove")}</Btn>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: u.can_report_breakdowns!==false?C.green:C.muted }}>{u.can_report_breakdowns!==false?"✅":"🚫"} {t(lang,"canReportBreakdowns")}</span>
+                <span style={{ fontSize: 11, color: u.can_open_tickets!==false?C.green:C.muted }}>{u.can_open_tickets!==false?"✅":"🚫"} {t(lang,"canOpenTickets")}</span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn small variant="secondary" onClick={() => startEdit(u)}>{t(lang,"edit")}</Btn>
+                <Btn small variant="danger" onClick={() => deleteUser(u.id)}>{t(lang,"remove")}</Btn>
+              </div>
             </div>
           ))}
           {users.length===0 && <div style={{ color: C.muted, fontSize: 13 }}>{t(lang,"noUsersRegistered")}</div>}

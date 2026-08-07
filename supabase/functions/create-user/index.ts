@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
     if (callerRole?.role !== "admin") return json({ error: "Admin access required" }, 403);
 
     const body = await req.json();
-    const { email, phone, password, name, role, site, department, supervised_sites, supervised_categories, language } = body || {};
+    const { email, phone, password, name, role, site, department, supervised_sites, supervised_categories, language, can_report_breakdowns, can_open_tickets } = body || {};
 
     if (!name) return json({ error: "Name is required" }, 400);
     if (!password || password.length < 6) return json({ error: "Password must be at least 6 characters" }, 400);
@@ -80,6 +80,8 @@ Deno.serve(async (req) => {
       supervised_sites: supervised_sites?.length ? supervised_sites : null,
       supervised_categories: supervised_categories?.length ? supervised_categories : null,
       language: language || "en",
+      can_report_breakdowns: can_report_breakdowns !== false,
+      can_open_tickets: can_open_tickets !== false,
     }], { onConflict: "email" });
     if (upsertErr) return json({ error: upsertErr.message }, 400);
 

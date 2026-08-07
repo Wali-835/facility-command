@@ -696,8 +696,8 @@ export default function AssetPage() {
           )}
           {/* Action Buttons */}
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {/* Everyone can report — unless there's already an open item, in which case Add Update lives in the Breakdowns & Issues list below */}
-            {!firstOpenReport && (
+            {/* Unless there's already an open item, in which case Add Update lives in the Breakdowns & Issues list below */}
+            {!firstOpenReport && userRole?.can_report_breakdowns !== false && (
               <>
                 <Btn onClick={() => setView("breakdown")} color={C.red}>🚨 {t(lang,"reportBreakdown")}</Btn>
                 <Btn onClick={() => setView("issue")} color={C.yellow}>⚠️ {t(lang,"reportIssue")}</Btn>
