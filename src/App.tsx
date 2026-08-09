@@ -2690,7 +2690,7 @@ function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupe
 const TICKET_STATUSES = ["Open","In Progress","Resolved","Closed"];
 const ARCHIVED_TICKET_STATUSES = ["Resolved","Closed"];
 
-function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor, technicians, vendors, departmentOptions, workOrders, setWorkOrders, lang, userRole }) {
+function TicketDetail({ ticket, allTickets, onClose, onUpdated, onChildAdded, onSelectTicket, isMaintenance, isSupervisor, isEngineer, isAdmin, technicians, vendors, departmentOptions, workOrders, setWorkOrders, lang, userRole }) {
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [comment, setComment] = useState("");
@@ -2705,6 +2705,15 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
   const [targetDateVal, setTargetDateVal] = useState(ticket.target_date || "");
   const [photos, setPhotos] = useState([]);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [showSubForm, setShowSubForm] = useState(false);
+  const [subForm, setSubForm] = useState({ title: "", category: ticket.category||"General Maintenance", priority: "Medium", assignee: "", vendor: "", departments: [], target_date: "" });
+  const subF = (k) => (v) => setSubForm(p => ({ ...p, [k]: v }));
+  const toggleSubDept = (d) => setSubForm(p => ({ ...p, departments: p.departments.includes(d) ? p.departments.filter(x => x!==d) : [...p.departments, d] }));
+
+  const childTickets = (allTickets||[]).filter(tk => tk.parent_ticket_id === ticket.id);
+  const parentTicket = ticket.parent_ticket_id ? (allTickets||[]).find(tk => tk.id === ticket.parent_ticket_id) : null;
+  const allChildrenClosed = childTickets.length>0 && childTickets.every(c => ARCHIVED_TICKET_STATUSES.includes(c.status));
+  const isRequester = userRole?.name && userRole.name === ticket.requested_by;
 
   useEffect(() => { loadEvents(); loadPhotos(); }, []);
   const loadEvents = async () => {
@@ -2835,11 +2844,38 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
   const technicianOptions = ["— Unassigned —", ...(technicians||[]).map(tc => tc.name)];
   const vendorOptions = ["— None —", ...(vendors||[]).filter(v => v.status==="Active").map(v => v.name)];
 
+  const submitSubTicket = async () => {
+    if (!subForm.title) { setError(t(lang,"title")); return; }
+    setSaving(true); setError(null);
+    const assignee = subForm.assignee==="— Unassigned —"||!subForm.assignee ? null : subForm.assignee;
+    const vendor = subForm.vendor==="— None —"||!subForm.vendor ? null : subForm.vendor;
+    const record = {
+      id: uid("TCK"), title: subForm.title, description: null, category: subForm.category, priority: subForm.priority,
+      status: "Open", site: ticket.site||null, location_detail: ticket.location_detail||null,
+      target_date: subForm.target_date||null, departments: subForm.departments.length?subForm.departments:null,
+      asset_id: ticket.asset_id||null, asset_name: ticket.asset_name||null, work_order_id: null,
+      requested_by: ticket.requested_by, assignee, vendor, parent_ticket_id: ticket.id,
+    };
+    const { error: err } = await supabase.from("tickets").insert([record]);
+    if (err) { setError(err.message); setSaving(false); return; }
+    await supabase.from("ticket_events").insert([{ id: uid("TEV"), ticket_id: record.id, event_type: "created", note: `${t(lang,"subTicketOf")} ${ticket.title}`, by: userRole?.name||"—", department: userRole?.department||null }]);
+    if (assignee) await notifyAssignee(assignee, `${t(lang,"assignedToTicket")}: ${record.title} (${record.id})`, record.id);
+    await logEvent("sub_ticket_created", `${t(lang,"subTicketCreated")}: ${record.title}`);
+    if (ticket.status === "Open") { await supabase.from("tickets").update({ status: "In Progress" }).eq("id", ticket.id); onUpdated({ ...ticket, status: "In Progress" }); }
+    if (onChildAdded) onChildAdded(record);
+    setSubForm({ title: "", category: ticket.category||"General Maintenance", priority: "Medium", assignee: "", vendor: "", departments: [], target_date: "" });
+    setShowSubForm(false);
+    setSaving(false);
+  };
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 640, marginTop: 20, marginBottom: 20 }}>
         <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
+            {parentTicket && onSelectTicket && (
+              <button onClick={() => onSelectTicket(parentTicket)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12, padding: 0, marginBottom: 4, display: "block" }}>↑ {t(lang,"subTicketOf")} {parentTicket.title}</button>
+            )}
             <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{ticket.title}</div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{ticket.category||"—"} · {ticket.site||"—"}{ticket.location_detail?` · 📍 ${ticket.location_detail}`:""}{ticket.asset_name?` · ${ticket.asset_name}`:""}</div>
           </div>
@@ -2950,14 +2986,72 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
               )}
             </div>
           )}
+          {(childTickets.length>0 || isEngineer) && (
+            <div style={{ marginBottom: 20, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: (childTickets.length>0||showSubForm)?12:0 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", fontWeight: 700 }}>🌳 {t(lang,"subTickets")} {childTickets.length>0?`(${childTickets.length})`:""}</div>
+                {isEngineer && !showSubForm && <button onClick={() => setShowSubForm(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12 }}>+ {t(lang,"splitIntoSubTicket")}</button>}
+              </div>
+              {childTickets.length>0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: showSubForm?12:0 }}>
+                  {childTickets.map(c => (
+                    <div key={c.id} onClick={() => onSelectTicket && onSelectTicket(c)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: onSelectTicket?"pointer":"default" }}>
+                      <div>
+                        <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{c.title}</div>
+                        <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{(c.departments||[]).join(", ")||c.assignee||c.vendor||t(lang,"unassigned")}</div>
+                      </div>
+                      <Badge label={c.status} color={ARCHIVED_TICKET_STATUSES.includes(c.status)?C.green:c.status==="In Progress"?C.blue:C.yellow} />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showSubForm && (
+                <div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Input label={t(lang,"title")} value={subForm.title} onChange={subF("title")} />
+                    <Sel label={t(lang,"category")} value={subForm.category} onChange={subF("category")} options={WO_CATEGORIES} />
+                    <Sel label={t(lang,"priority")} value={subForm.priority} onChange={subF("priority")} options={["Critical","High","Medium","Low"]} />
+                    <Sel label={t(lang,"assignee")} value={subForm.assignee||"— Unassigned —"} onChange={subF("assignee")} options={technicianOptions} />
+                    <Sel label={t(lang,"vendor")} value={subForm.vendor||"— None —"} onChange={subF("vendor")} options={vendorOptions} />
+                    <Input label={t(lang,"targetCompletion")} value={subForm.target_date} onChange={subF("target_date")} type="date" />
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"departments")}</div>
+                    {(departmentOptions||[]).length>0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {departmentOptions.map(d => (
+                          <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.subtle, cursor: "pointer", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px" }}>
+                            <input type="checkbox" checked={subForm.departments.includes(d)} onChange={() => toggleSubDept(d)} /> {d}
+                          </label>
+                        ))}
+                      </div>
+                    ) : <div style={{ fontSize: 11, color: C.muted }}>{t(lang,"noDepartmentsYet")}</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <Btn small onClick={submitSubTicket} disabled={saving}>{saving?t(lang,"saving"):t(lang,"create")}</Btn>
+                    <Btn small variant="secondary" onClick={() => setShowSubForm(false)}>{t(lang,"cancel")}</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {isMaintenance && (
-            <div style={{ marginBottom: 20 }}>
+            <div style={{ marginBottom: childTickets.length>0 && !ARCHIVED_TICKET_STATUSES.includes(ticket.status) ? 0 : 20 }}>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>{t(lang,"status")}</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {TICKET_STATUSES.map(s => (
+                {(childTickets.length>0 ? TICKET_STATUSES.filter(s => !ARCHIVED_TICKET_STATUSES.includes(s)) : TICKET_STATUSES).map(s => (
                   <button key={s} onClick={() => changeStatus(s)} disabled={saving} style={{ background: ticket.status===s?C.accent:C.surface, color: ticket.status===s?"#fff":C.muted, border: `1px solid ${ticket.status===s?C.accent:C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{s}</button>
                 ))}
               </div>
+            </div>
+          )}
+          {childTickets.length>0 && !ARCHIVED_TICKET_STATUSES.includes(ticket.status) && (
+            <div style={{ marginBottom: 20, marginTop: isMaintenance?10:0, fontSize: 12, color: C.muted }}>
+              {allChildrenClosed ? (
+                (isRequester || isAdmin) ? (
+                  <Btn small onClick={() => changeStatus("Closed")} disabled={saving} color={C.green}>✅ {t(lang,"closeMainTicket")}</Btn>
+                ) : `✅ ${t(lang,"awaitingRequesterClose")}`
+              ) : `⏳ ${t(lang,"awaitingSubTicketsClosed")}`}
             </div>
           )}
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 12 }}>{t(lang,"ticketLog")}</div>
@@ -2983,7 +3077,7 @@ function TicketDetail({ ticket, onClose, onUpdated, isMaintenance, isSupervisor,
   );
 }
 
-function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, assets, workOrders, setWorkOrders, vendors, lang, sites }) {
+function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, isEngineer, technicians, assets, workOrders, setWorkOrders, vendors, lang, sites }) {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -2992,6 +3086,7 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
   const [selected, setSelected] = useState(null);
   const [statusFilter, setStatusFilter] = useState("Active");
   const [deptFilter, setDeptFilter] = useState("All");
+  const [showSubTickets, setShowSubTickets] = useState(false);
   const [form, setForm] = useState({ title: "", description: "", category: "General Maintenance", priority: "Medium", site: "", asset: "", work_order_id: "", assignee: "", location_detail: "", target_date: "", departments: [] });
   const f = (k) => (v) => setForm(p => ({ ...p, [k]: v }));
   const [layouts, setLayouts] = useState([]);
@@ -3054,13 +3149,18 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
     setSaving(false);
   };
 
+  const childrenByParent = {};
+  tickets.forEach(tk => { if (tk.parent_ticket_id) { (childrenByParent[tk.parent_ticket_id] = childrenByParent[tk.parent_ticket_id] || []).push(tk); } });
+  const ticketsById = {}; tickets.forEach(tk => { ticketsById[tk.id] = tk; });
+
   const filtered = tickets
+    .filter(tk => showSubTickets || !tk.parent_ticket_id)
     .filter(tk => statusFilter==="All" ? true : statusFilter==="Active" ? !ARCHIVED_TICKET_STATUSES.includes(tk.status) : statusFilter==="Archived" ? ARCHIVED_TICKET_STATUSES.includes(tk.status) : tk.status===statusFilter)
     .filter(tk => deptFilter==="All" || (tk.departments||[]).includes(deptFilter));
 
   return (
     <div>
-      {selected && <TicketDetail ticket={selected} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} isMaintenance={isMaintenance} isSupervisor={isSupervisor} technicians={technicians} vendors={vendors} departmentOptions={departmentOptions} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} userRole={userRole} />}
+      {selected && <TicketDetail ticket={selected} allTickets={tickets} onClose={() => setSelected(null)} onUpdated={updated => { setTickets(prev => prev.map(tk => tk.id===updated.id?updated:tk)); setSelected(updated); }} onChildAdded={child => setTickets(prev => [child, ...prev])} onSelectTicket={tk => setSelected(tk)} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} isAdmin={isAdmin} technicians={technicians} vendors={vendors} departmentOptions={departmentOptions} workOrders={workOrders} setWorkOrders={setWorkOrders} lang={lang} userRole={userRole} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -3076,6 +3176,9 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
               {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted, cursor: "pointer" }}>
+            <input type="checkbox" checked={showSubTickets} onChange={e => setShowSubTickets(e.target.checked)} /> {t(lang,"showSubTickets")}
+          </label>
         </div>
         {userRole?.can_open_tickets !== false && <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"newTicket")}</Btn>}
       </div>
@@ -3159,12 +3262,16 @@ function Tickets({ userRole, isAdmin, isSupervisor, isMaintenance, technicians, 
           {filtered.map(tk => (
             <div key={tk.id} onClick={() => setSelected(tk)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div>
+                {tk.parent_ticket_id && (
+                  <div style={{ fontSize: 11, color: C.blue, marginBottom: 3 }}>↳ {t(lang,"subTicketOf")} {ticketsById[tk.parent_ticket_id]?.title || tk.parent_ticket_id}</div>
+                )}
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{tk.title}</div>
                 <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{tk.category||"—"}{tk.site?` · ${tk.site}`:""}{tk.location_detail?` · 📍 ${tk.location_detail}`:""}{tk.asset_name?` · ${tk.asset_name}`:""} · {fmtDateTime(tk.requested_at)}</div>
-                {(tk.departments?.length>0 || tk.target_date) && (
+                {(tk.departments?.length>0 || tk.target_date || childrenByParent[tk.id]?.length>0) && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                     {(tk.departments||[]).map(d => <Badge key={d} label={d} color={C.purple} />)}
                     {tk.target_date && <Badge label={`🎯 ${fmtDate(tk.target_date)}`} color={tk.target_date<TODAY && !ARCHIVED_TICKET_STATUSES.includes(tk.status) ? C.red : C.muted} />}
+                    {childrenByParent[tk.id]?.length>0 && <Badge label={`🌳 ${childrenByParent[tk.id].filter(c => ARCHIVED_TICKET_STATUSES.includes(c.status)).length}/${childrenByParent[tk.id].length} ${t(lang,"subTicketsClosed")}`} color={C.blue} />}
                   </div>
                 )}
               </div>
@@ -6694,7 +6801,7 @@ export default function App() {
         {activeTab===t(lang,"pendingApprovalsSection") && <PendingApprovals userRole={userRole} isAdmin={isAdmin} lang={lang} assets={assets} vendors={vendors} onJumpToBreakdowns={() => setTab(t(lang,"breakdownsAndIssues"))} />}
         {activeTab===t(lang,"mySubmissions") && <MySubmissions userRole={userRole} lang={lang} />}
         {activeTab===t(lang,"breakdownsAndIssues") && <Breakdowns userRole={userRole} assets={assets} setAssets={setAssets} vendors={vendors} workOrders={workOrders} setWorkOrders={setWorkOrders} technicians={technicians} lang={lang} setIssuesFromParent={setIssues} isMaintenance={isMaintenance} isSupervisor={isSupervisor} isEngineer={isEngineer} />}
-        {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} technicians={technicians} assets={assets} workOrders={workOrders} setWorkOrders={setWorkOrders} vendors={vendors} lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"tickets") && <Tickets userRole={userRole} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} assets={assets} workOrders={workOrders} setWorkOrders={setWorkOrders} vendors={vendors} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"insurance") && isEngineer && <InsuranceManagement assets={assets} isAdmin={isAdmin} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"purchaseOrders") && isEngineer && <PurchaseOrders assets={assets} isAdmin={isAdmin} lang={lang} />}
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
