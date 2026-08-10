@@ -3937,6 +3937,10 @@ function Assets({ assets, setAssets, loading, onAdd, isAdmin, isSupervisor, isMa
   const [deleteItem, setDeleteItem] = useState(null); const [selectedAsset, setSelectedAsset] = useState(null);
   const [docsAsset, setDocsAsset] = useState(null); const [insuranceAsset, setInsuranceAsset] = useState(null);
   const [printingHistoryId, setPrintingHistoryId] = useState(null);
+  const [showImport, setShowImport] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState(null);
+  const [importSummary, setImportSummary] = useState(null);
   const [siteFilter, setSiteFilter] = useState("All"); const [catFilter, setCatFilter] = useState("All"); const [subcatFilter, setSubcatFilter] = useState("All"); const [ownerFilter, setOwnerFilter] = useState("All"); const [modelFilter, setModelFilter] = useState("All"); const [search, setSearch] = useState("");
   const [mheModels, setMheModels] = useState([]);
   useEffect(() => {
@@ -4039,6 +4043,83 @@ const filtered = assets.filter(a =>
     setPrintingHistoryId(null);
   };
 
+  const ASSET_IMPORT_HEADERS = ["Asset Name*","Asset Code","Category","Subcategory","Site*","Brand","Model","Serial Number","Owner","Est. Value","Manufacture Date (YYYY-MM-DD)","PM Frequency (months)","PM Task","Next Service Date (YYYY-MM-DD)","Invoice Number","PO Number","Purchase Date (YYYY-MM-DD)"];
+
+  const downloadAssetTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const exampleRows = [
+      { "Asset Name*": "Reach Truck 01", "Asset Code": "MHE-001", "Category": "MHE", "Subcategory": "Reach Truck", "Site*": (sites||[]).find(s => s!=="— Select Site —")||"", "Brand": "Jungheinrich", "Model": "ETV 216", "Serial Number": "SN-12345", "Owner": "EPx Logistics", "Est. Value": "45000", "Manufacture Date (YYYY-MM-DD)": "2022-03-01", "PM Frequency (months)": "1", "PM Task": "Scheduled Maintenance", "Next Service Date (YYYY-MM-DD)": "2026-09-01", "Invoice Number": "", "PO Number": "", "Purchase Date (YYYY-MM-DD)": "2022-02-15" },
+    ];
+    const ws = XLSX.utils.json_to_sheet(exampleRows, { header: ASSET_IMPORT_HEADERS });
+    XLSX.utils.book_append_sheet(wb, ws, "Assets");
+    const sitesWs = XLSX.utils.aoa_to_sheet([["Valid Site names — copy exactly into the Site* column"], ...(sites||[]).filter(s => s!=="— Select Site —").map(s => [s])]);
+    XLSX.utils.book_append_sheet(wb, sitesWs, "Valid Sites");
+    const catWs = XLSX.utils.aoa_to_sheet([["Example categories (free text — not required to match)"], ...WO_CATEGORIES.map(c => [c])]);
+    XLSX.utils.book_append_sheet(wb, catWs, "Example Categories");
+    XLSX.writeFile(wb, "Asset_Import_Template.xlsx");
+  };
+
+  const parseExcelDate = (val) => {
+    if (val===null || val===undefined || val==="") return null;
+    if (val instanceof Date) return isNaN(val) ? null : val.toISOString().split("T")[0];
+    const s = String(val).trim();
+    if (!s) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const parsed = new Date(s);
+    return isNaN(parsed.getTime()) ? null : parsed.toISOString().split("T")[0];
+  };
+
+  const handleAssetImport = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setImporting(true); setImportError(null); setImportSummary(null);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary", cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+        if (rows.length === 0) { setImportError(t(lang,"importNoRows")); setImporting(false); e.target.value=""; return; }
+        const validSites = new Set((sites||[]).filter(s => s!=="— Select Site —"));
+        const existingCodes = new Set(assets.map(a => a.asset_code).filter(Boolean));
+        const existingSerials = new Set(assets.map(a => a.serial_number).filter(Boolean));
+        const records = []; const skipped = [];
+        rows.forEach((r, i) => {
+          const name = String(r["Asset Name*"] ?? r["Asset Name"] ?? "").trim();
+          const site = String(r["Site*"] ?? r["Site"] ?? "").trim();
+          const rowLabel = name || `${t(lang,"row")||"Row"} ${i+2}`;
+          if (!name || !site) { skipped.push(`${rowLabel}: ${t(lang,"importMissingRequired")}`); return; }
+          if (!validSites.has(site)) { skipped.push(`${rowLabel}: ${t(lang,"importUnknownSite")} "${site}"`); return; }
+          const asset_code = String(r["Asset Code"] || "").trim() || null;
+          const serial_number = String(r["Serial Number"] || "").trim() || null;
+          if (asset_code && existingCodes.has(asset_code)) { skipped.push(`${rowLabel}: ${t(lang,"duplicateAssetCode")} (${asset_code})`); return; }
+          if (serial_number && existingSerials.has(serial_number)) { skipped.push(`${rowLabel}: ${t(lang,"duplicateSerialNumber")} (${serial_number})`); return; }
+          if (asset_code) existingCodes.add(asset_code);
+          if (serial_number) existingSerials.add(serial_number);
+          records.push({
+            id: uid("AST"), name, asset_code, category: String(r["Category"]||"").trim()||null, subcategory: String(r["Subcategory"]||"").trim()||null,
+            location: site, brand: String(r["Brand"]||"").trim()||null, model: String(r["Model"]||"").trim()||null, serial_number,
+            owner: String(r["Owner"]||"").trim()||null, value: r["Est. Value"]!==""&&r["Est. Value"]!==undefined ? String(r["Est. Value"]).trim() : null,
+            manufacture_date: parseExcelDate(r["Manufacture Date (YYYY-MM-DD)"]), status: "Operational", last_service: TODAY,
+            pm_frequency: parseInt(r["PM Frequency (months)"])||1, pm_task: String(r["PM Task"]||"").trim()||"Scheduled Maintenance",
+            next_service: parseExcelDate(r["Next Service Date (YYYY-MM-DD)"]), last_pm_date: null,
+            invoice_number: String(r["Invoice Number"]||"").trim()||null, po_number: String(r["PO Number"]||"").trim()||null,
+            purchase_date: parseExcelDate(r["Purchase Date (YYYY-MM-DD)"]),
+          });
+        });
+        if (records.length === 0) { setImportError(t(lang,"importNoValidRows")); setImportSummary({ imported: 0, skipped }); setImporting(false); e.target.value=""; return; }
+        const { error: err } = await supabase.from("assets").insert(records);
+        if (err) { setImportError(err.message); setImporting(false); e.target.value=""; return; }
+        setAssets(prev => [...records, ...prev]);
+        setImportSummary({ imported: records.length, skipped });
+      } catch (ex) {
+        setImportError(t(lang,"importParseError"));
+      }
+      setImporting(false);
+      e.target.value = "";
+    };
+    reader.readAsBinaryString(file);
+  };
+
   const generateTransferForm = (asset, oldLocation, newLocation) => {
     applyPlugin(jsPDF);
     const doc = new jsPDF();
@@ -4112,6 +4193,7 @@ const filtered = assets.filter(a =>
           {modelOptions.map(m => <option key={m}>{m}</option>)}
         </select>
         {isAdmin && <Btn onClick={() => setShowForm(v => !v)}>{t(lang,"addAsset")}</Btn>}
+        {isAdmin && <Btn variant="secondary" onClick={() => setShowImport(v => !v)}>📥 {t(lang,"importFromExcel")}</Btn>}
       </div>
       {showForm && isAdmin && (
         <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
@@ -4165,6 +4247,30 @@ const filtered = assets.filter(a =>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <Btn onClick={submit} disabled={saving}>{saving?t(lang,"saving"):t(lang,"register")}</Btn>
             <Btn variant="secondary" onClick={() => setShowForm(false)}>{t(lang,"cancel")}</Btn>
+          </div>
+        </div>
+      )}
+      {showImport && isAdmin && (
+        <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 20, marginBottom: 18 }}>
+          <div style={{ color: C.accent, fontWeight: 700, marginBottom: 10, fontSize: 13, textTransform: "uppercase" }}>📥 {t(lang,"importFromExcel")}</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{t(lang,"importAssetsHint")}</div>
+          <ErrBanner msg={importError} onDismiss={() => setImportError(null)} />
+          {importSummary && (
+            <div style={{ background: importSummary.imported>0?C.green+"11":C.yellow+"11", border: `1px solid ${importSummary.imported>0?C.green:C.yellow}44`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12 }}>
+              <div style={{ color: importSummary.imported>0?C.green:C.yellow, fontWeight: 700 }}>{t(lang,"importedCount").replace("{n}", importSummary.imported)}</div>
+              {importSummary.skipped.length>0 && (
+                <div style={{ marginTop: 8, color: C.muted, maxHeight: 140, overflowY: "auto" }}>
+                  {importSummary.skipped.map((s,i) => <div key={i}>⚠️ {s}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <Btn variant="secondary" onClick={downloadAssetTemplate}>📄 {t(lang,"downloadTemplate")}</Btn>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, background: C.accent, color: "#fff", borderRadius: 6, padding: "7px 14px", fontSize: 13, fontWeight: 700, cursor: importing?"not-allowed":"pointer", opacity: importing?0.6:1 }}>
+              {importing ? `⏳ ${t(lang,"importing")}` : `📤 ${t(lang,"uploadFile")}`}
+              <input type="file" accept=".xlsx,.xls" onChange={handleAssetImport} disabled={importing} style={{ display: "none" }} />
+            </label>
           </div>
         </div>
       )}
