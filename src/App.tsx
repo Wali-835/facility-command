@@ -5348,6 +5348,47 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const woByStatus=[{label:t(lang,"open"),count:fWorkOrders.filter(w => w.status==="Open").length,color:C.accent},{label:"In Progress",count:fWorkOrders.filter(w => w.status==="In Progress").length,color:C.blue},{label:"Pending",count:fWorkOrders.filter(w => w.status==="Pending").length,color:C.yellow},{label:t(lang,"completed"),count:completedWOs,color:C.green}];
   const totalAssets=fAssets.length; const operationalAssets=fAssets.filter(a => a.status==="Operational").length; const downtimeAssets=fAssets.filter(a => a.status==="Under Maintenance").length; const degradedAssets=fAssets.filter(a => a.status==="Degraded").length; const uptimeRate=totalAssets>0?Math.round((operationalAssets/totalAssets)*100):0; const totalDowntimeMins=fBreakdowns.filter(b => b.downtime_hours).reduce((s,b) => s+(b.downtime_hours||0),0);
   const pmDue=fAssets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length; const pmCompliance=totalAssets>0?Math.round(((totalAssets-pmDue)/totalAssets)*100):0; const pmLogs=fLogs.filter(l => l.log_type==="Preventive Maintenance").length; const correctiveLogs=fLogs.filter(l => l.log_type==="Corrective Repair").length;
+
+  // Risk assessment — combines PM lateness, breakdown frequency, downtime, and current
+  // status into one score per asset, so the assets most likely to fail next surface first.
+  const monthsOverdue = (a) => {
+    if (!a.pm_frequency) return null;
+    if (!a.last_pm_date) return Infinity;
+    const now = new Date(); const last = new Date(a.last_pm_date);
+    return (now.getFullYear()-last.getFullYear())*12 + (now.getMonth()-last.getMonth()) - a.pm_frequency;
+  };
+  const pmRiskScore = (a) => { const mo = monthsOverdue(a); if (mo===null) return 0; if (mo===Infinity) return 4; if (mo<=0) return 0; if (mo<=1) return 1; if (mo<=3) return 2; return 3; };
+  const breakdownRiskScore = (n) => n===0?0:n<=1?1:n<=3?2:3;
+  const downtimeRiskScore = (hrs) => hrs<8?0:hrs<24?1:hrs<72?2:3;
+  const statusRiskScore = (status) => status==="Under Maintenance"?2:status==="Degraded"?1:0;
+  const riskLevelOf = (score) => score>=8?"Critical":score>=5?"High":score>=2?"Medium":"Low";
+  const riskColorOf = (level) => level==="Critical"?C.red:level==="High"?C.accent:level==="Medium"?C.yellow:C.green;
+
+  const [riskLevelFilter, setRiskLevelFilter] = useState("All");
+  const riskRows = fAssets.map(a => {
+    const assetBreakdowns = fBreakdowns.filter(b => (a.id && b.asset_id===a.id) || b.asset_name===a.name);
+    const breakdownCount = assetBreakdowns.length;
+    const downtimeHrs = assetBreakdowns.reduce((s,b) => s+(b.downtime_hours||0), 0);
+    const mo = monthsOverdue(a);
+    const score = pmRiskScore(a) + breakdownRiskScore(breakdownCount) + downtimeRiskScore(downtimeHrs) + statusRiskScore(a.status);
+    return { asset: a, monthsOverdue: mo, breakdownCount, downtimeHrs, score, level: riskLevelOf(score) };
+  }).sort((x,y) => y.score-x.score);
+  const riskRowsFiltered = riskRows.filter(r => riskLevelFilter==="All" || r.level===riskLevelFilter);
+  const riskCounts = { Critical: riskRows.filter(r => r.level==="Critical").length, High: riskRows.filter(r => r.level==="High").length, Medium: riskRows.filter(r => r.level==="Medium").length, Low: riskRows.filter(r => r.level==="Low").length };
+
+  const exportRiskAssessmentPDF = () => {
+    applyPlugin(jsPDF);
+    const doc = new jsPDF();
+    doc.setFillColor(249,115,22); doc.rect(0,0,220,28,"F"); doc.setTextColor(255,255,255); doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.text("FACILITY COMMAND",14,12); doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.text("Asset Risk Assessment",14,20); doc.text(`Generated: ${new Date().toLocaleString("en-GB")}${riskLevelFilter!=="All"?` · Risk: ${riskLevelFilter}`:""}`,14,26);
+    doc.setTextColor(0,0,0);
+    doc.autoTable({
+      startY: 34,
+      head: [["Asset","Site","Category","Status","PM Overdue","Breakdowns","Downtime","Risk Score","Risk Level"]],
+      body: riskRowsFiltered.map(r => [r.asset.name, r.asset.location||"—", r.asset.category||"—", r.asset.status||"—", r.monthsOverdue===null?"No PM plan":r.monthsOverdue===Infinity?"Never serviced":r.monthsOverdue>0?`${r.monthsOverdue} mo.`:"On schedule", r.breakdownCount, formatDowntime(r.downtimeHrs*60), r.score, r.level]),
+      headStyles: { fillColor: [249,115,22], textColor: 255 }, alternateRowStyles: { fillColor: [245,245,245] }, margin: { left: 14, right: 14 }, styles: { fontSize: 8 },
+    });
+    doc.save(`Asset_Risk_Assessment_${TODAY}.pdf`);
+  };
   const activeVendors=vendors.filter(v => v.status==="Active").length; const vendorWOs=vendors.map(v => ({ name: v.name, open: fWorkOrders.filter(w => w.vendor===v.name&&w.status!=="Completed").length, completed: fWorkOrders.filter(w => w.vendor===v.name&&w.status==="Completed").length, rating: v.rating })).filter(v => v.open+v.completed>0).sort((a,b) => (b.open+b.completed)-(a.open+a.completed));
   const totalBreakdowns=fBreakdowns.length; const resolvedBreakdowns=fBreakdowns.filter(b => b.status==="Resolved").length; const avgDowntime=resolvedBreakdowns>0?Math.round(fBreakdowns.filter(b => b.downtime_hours).reduce((s,b) => s+(b.downtime_hours||0),0)/resolvedBreakdowns):0;
   const totalIssues=fIssues.length; const resolvedIssues=fIssues.filter(i => i.status==="Resolved").length; const openIssues=fIssues.filter(i => i.status==="Open").length;
@@ -5604,6 +5645,50 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+          </div>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+              <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600 }}>🎯 {t(lang,"riskAssessment")}</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <select value={riskLevelFilter} onChange={e => setRiskLevelFilter(e.target.value)} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 10px", fontSize: 12 }}>
+                  <option value="All">{t(lang,"all")} {t(lang,"riskLevel")}</option>
+                  {["Critical","High","Medium","Low"].map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+                <button onClick={exportRiskAssessmentPDF} disabled={riskRowsFiltered.length===0} style={{ background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 {t(lang,"exportPDF")}</button>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>{t(lang,"riskAssessmentHint")}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 16 }}>
+              <KpiCard icon="🔴" label="Critical" value={riskCounts.Critical} color={C.red} />
+              <KpiCard icon="🟠" label="High" value={riskCounts.High} color={C.accent} />
+              <KpiCard icon="🟡" label="Medium" value={riskCounts.Medium} color={C.yellow} />
+              <KpiCard icon="🟢" label="Low" value={riskCounts.Low} color={C.green} />
+            </div>
+            {riskRowsFiltered.length===0 ? (
+              <div style={{ textAlign: "center", padding: 24, color: C.muted, fontSize: 13, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>{t(lang,"noAssetsFound")}</div>
+            ) : (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {[t(lang,"assetName"),t(lang,"site"),t(lang,"category"),t(lang,"status"),t(lang,"pmOverdue"),t(lang,"breakdowns"),t(lang,"totalDowntime"),t(lang,"riskLevel")].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {riskRowsFiltered.slice(0,150).map((r,i) => (
+                      <tr key={r.asset.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i%2===0?"transparent":C.surface+"44" }}>
+                        <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600 }}>{r.asset.name}</td>
+                        <td style={{ padding: "8px 10px", color: C.subtle }}>{r.asset.location||"—"}</td>
+                        <td style={{ padding: "8px 10px", color: C.subtle }}>{r.asset.category||"—"}</td>
+                        <td style={{ padding: "8px 10px" }}><Badge label={r.asset.status||"—"} color={statusColor(r.asset.status)} /></td>
+                        <td style={{ padding: "8px 10px", color: r.monthsOverdue>0||r.monthsOverdue===Infinity?C.red:C.subtle }}>{r.monthsOverdue===null?t(lang,"noPmPlan"):r.monthsOverdue===Infinity?t(lang,"neverServiced"):r.monthsOverdue>0?`${r.monthsOverdue} mo. ${t(lang,"overdue")}`:t(lang,"onSchedule")}</td>
+                        <td style={{ padding: "8px 10px", color: C.subtle }}>{r.breakdownCount}</td>
+                        <td style={{ padding: "8px 10px", color: C.subtle }}>{formatDowntime(r.downtimeHrs*60)}</td>
+                        <td style={{ padding: "8px 10px" }}><Badge label={`${r.level} (${r.score})`} color={riskColorOf(r.level)} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
