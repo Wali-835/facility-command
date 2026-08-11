@@ -83,7 +83,7 @@ const notifyAssignee = (recipient, message, linkId) => {
   return supabase.from("notifications").insert([{ id: uid("NTF"), recipient, type: "work_order", message, link_type: "work_order", link_id: linkId||null, read: false }]);
 };
 const statusColor = (s) => ({
-  Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow,
+  Open: C.accent, "In Progress": C.blue, Completed: C.green, Pending: C.yellow, Missed: C.red,
   Operational: C.green, "Under Maintenance": C.accent, Degraded: C.red,
   Active: C.green, Inactive: C.muted, Cancelled: C.muted, Acknowledged: C.blue, Resolved: C.green,
   "Preventive Maintenance": C.blue, "Corrective Repair": C.red,
@@ -2275,7 +2275,7 @@ function WOMaintenanceModal({ wo, onClose, isAdmin, isSupervisor, isMaintenance,
   );
 }
 const WO_CATEGORIES = ["MHE","HVAC","Fire Alarm & Suppression","Electrical","Plumbing","Civil & Structural","Security Systems","Lighting","General Maintenance"];
-const WO_STATUSES = ["Open","In Progress","Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled","Completed"];
+const WO_STATUSES = ["Open","In Progress","Awaiting PO","Awaiting Parts","Awaiting Approval","On Hold","Scheduled","Completed","Missed"];
 const CATEGORY_ICONS = { "MHE":"🏭","HVAC":"❄️","Fire Alarm & Suppression":"🔥","Electrical":"⚡","Plumbing":"🔧","Civil & Structural":"🏗️","Security Systems":"🔒","Lighting":"💡","General Maintenance":"🔨" };
 
 function WorkOrders({ workOrders, setWorkOrders, loading, onAdd, isAdmin, isSupervisor, isMaintenance, isEngineer, technicians, vendors, assets, lang, userRole, sites }) {
@@ -4441,7 +4441,7 @@ function Vendors({ vendors, setVendors, loading, onAdd, isAdmin, lang }) {
   );
 }
 
-function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang, sites }) {
+function PMUpload({ assets, workOrders, onAssetsImported, onWorkOrdersGenerated, lang, sites }) {
   const [generating, setGenerating] = useState(false); const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null); const [success, setSuccess] = useState(null);
   const pmDueCount = assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length;
@@ -4450,8 +4450,12 @@ function PMUpload({ assets, onAssetsImported, onWorkOrdersGenerated, lang, sites
     setGenerating(true); setError(null);
     const now=new Date(); const due=assets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; });
     if (!due.length) { setSuccess(t(lang,"pmDueMonth")); setGenerating(false); return; }
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+    const alreadyGenerated = new Set((workOrders||[]).filter(w => w.pm_month===currentMonthStr).map(w => w.asset_id));
+    const toCreate = due.filter(a => !alreadyGenerated.has(a.id));
+    if (!toCreate.length) { setSuccess(t(lang,"pmAlreadyGenerated")); setGenerating(false); return; }
     const dueDate=new Date(now.getFullYear(),now.getMonth()+1,0).toISOString().split("T")[0];
-    const newWOs=due.map(a => ({ id: uid("WO"), title: `PM - ${a.name}`, asset: a.name, priority: "Medium", status: "Open", assignee: null, start_date: TODAY, due: dueDate, vendor: null }));
+    const newWOs=toCreate.map(a => ({ id: uid("WO"), title: `PM - ${a.name}`, asset: a.name, asset_id: a.id, category: a.category||null, site: a.location||null, priority: "Medium", status: "Open", assignee: null, start_date: TODAY, due: dueDate, vendor: null, pm_month: currentMonthStr }));
     const { error: err }=await supabase.from("work_orders").insert(newWOs);
     if (err) { setError(err.message); } else { setSuccess(`Generated ${newWOs.length}!`); onWorkOrdersGenerated(newWOs); }
     setGenerating(false);
@@ -5348,6 +5352,7 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
   const woByStatus=[{label:t(lang,"open"),count:fWorkOrders.filter(w => w.status==="Open").length,color:C.accent},{label:"In Progress",count:fWorkOrders.filter(w => w.status==="In Progress").length,color:C.blue},{label:"Pending",count:fWorkOrders.filter(w => w.status==="Pending").length,color:C.yellow},{label:t(lang,"completed"),count:completedWOs,color:C.green}];
   const totalAssets=fAssets.length; const operationalAssets=fAssets.filter(a => a.status==="Operational").length; const downtimeAssets=fAssets.filter(a => a.status==="Under Maintenance").length; const degradedAssets=fAssets.filter(a => a.status==="Degraded").length; const uptimeRate=totalAssets>0?Math.round((operationalAssets/totalAssets)*100):0; const totalDowntimeMins=fBreakdowns.filter(b => b.downtime_hours).reduce((s,b) => s+(b.downtime_hours||0),0);
   const pmDue=fAssets.filter(a => { if (!a.pm_frequency) return false; if (!a.last_pm_date) return true; const now=new Date(); const last=new Date(a.last_pm_date); return (now.getFullYear()-last.getFullYear())*12+(now.getMonth()-last.getMonth())>=a.pm_frequency; }).length; const pmCompliance=totalAssets>0?Math.round(((totalAssets-pmDue)/totalAssets)*100):0; const pmLogs=fLogs.filter(l => l.log_type==="Preventive Maintenance").length; const correctiveLogs=fLogs.filter(l => l.log_type==="Corrective Repair").length;
+  const missedPMWOs = fWorkOrders.filter(w => w.status==="Missed" && w.pm_month);
 
   // Risk assessment — combines PM lateness, breakdown frequency, downtime, and current
   // status into one score per asset, so the assets most likely to fail next surface first.
@@ -5599,7 +5604,21 @@ function Reports({ workOrders, assets, vendors, lang, issues, sites }) {
               <KpiCard icon="⚠️" label={t(lang,"overdue")} value={pmDue} color={C.red} />
               <KpiCard icon="🔧" label={t(lang,"pmSection")} value={pmLogs} color={C.blue} />
               <KpiCard icon="🔨" label="Corrective" value={correctiveLogs} color={C.accent} />
+              <KpiCard icon="🚫" label={t(lang,"missedPMThisMonth")} value={missedPMWOs.length} color={C.red} />
             </div>
+            {missedPMWOs.length>0 && (
+              <div style={{ background: C.card, border: `1px solid ${C.red}44`, borderRadius: 10, padding: 16, marginTop: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 10, textTransform: "uppercase" }}>🚫 {t(lang,"missedPM")}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {missedPMWOs.slice(0,50).map(w => (
+                    <div key={w.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.subtle, padding: "6px 0", borderBottom: `1px solid ${C.border}22` }}>
+                      <span>{w.asset||"—"} · {w.site||"—"}</span>
+                      <span style={{ color: C.muted }}>{w.pm_month} · {t(lang,"due")}: {w.due?fmtDate(w.due):"—"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <div style={{ fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 14 }}>{t(lang,"breakdownAnalysis")}</div>
@@ -6998,7 +7017,7 @@ export default function App() {
         {activeTab===t(lang,"workOrders") && <WorkOrders workOrders={workOrders} setWorkOrders={setWorkOrders} loading={loading.workOrders} onAdd={r => setWorkOrders(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} technicians={technicians} vendors={vendors} assets={assets} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"assets") && <Assets assets={assets} setAssets={setAssets} loading={loading.assets} onAdd={r => setAssets(p => [r,...p])} isAdmin={isAdmin} isSupervisor={isSupervisor} isMaintenance={isMaintenance} isEngineer={isEngineer} vendors={vendors} lang={lang} userRole={userRole} sites={siteNames} />}
         {activeTab===t(lang,"vendors") && <Vendors vendors={vendors} setVendors={setVendors} loading={loading.vendors} onAdd={r => setVendors(p => [r,...p])} isAdmin={isAdmin} lang={lang} />}
-        {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} sites={siteNames} />}
+        {activeTab===t(lang,"pmPlanner") && <PMUpload assets={assets} workOrders={workOrders} onAssetsImported={r => setAssets(p => [...p,...r])} onWorkOrdersGenerated={r => setWorkOrders(p => [...r,...p])} lang={lang} sites={siteNames} />}
         {activeTab===t(lang,"reports") && <Reports workOrders={workOrders} assets={assets} vendors={vendors} lang={lang} issues={issues} isSupervisor={isSupervisor} sites={siteNames} />}
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
         {activeTab===t(lang,"partsCatalogMgmt") && isSupervisor && <PartsCatalogMgmt lang={lang} isAdmin={isAdmin} isSupervisor={isSupervisor} isEngineer={isEngineer} userRole={userRole} />}
