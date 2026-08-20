@@ -3369,6 +3369,104 @@ function AssetDocumentsModal({ asset, onClose, lang, userRole, isAdmin }) {
   );
 }
 
+function SiteDocumentsModal({ site, onClose, lang, userRole, isAdmin }) {
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [docType, setDocType] = useState("Operational License");
+  const [issueDate, setIssueDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const SITE_DOC_TYPES = ["Operational License","Approved Layout","Fire Safety Certificate","Civil Defense Permit","Environmental Permit","Other"];
+
+  useEffect(() => { loadDocs(); }, [site]);
+
+  const loadDocs = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("site_documents").select("*").eq("site", site).order("uploaded_at", { ascending: false });
+    setDocs(data || []);
+    setLoading(false);
+  };
+
+  const uploadDoc = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 15 * 1024 * 1024) { setError(t(lang,"maxFileSize")); return; }
+    setUploading(true); setError(null);
+    const path = `sites/${site}/${Date.now()}-${file.name}`;
+    const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
+    if (upErr) { setError(upErr.message); setUploading(false); return; }
+    const record = { id: uid("SDOC"), site, document_type: docType, file_name: file.name, file_path: path, issue_date: issueDate||null, expiry_date: expiryDate||null, notes: notes||null, uploaded_by: userRole?.name||"—" };
+    const { error: err } = await supabase.from("site_documents").insert([record]);
+    if (err) { setError(err.message); } else { setDocs(prev => [record, ...prev]); setNotes(""); setIssueDate(""); setExpiryDate(""); }
+    setUploading(false);
+    e.target.value = "";
+  };
+
+  const deleteDoc = async (doc) => {
+    await supabase.storage.from("asset-documents").remove([doc.file_path]);
+    await supabase.from("site_documents").delete().eq("id", doc.id);
+    setDocs(prev => prev.filter(d => d.id !== doc.id));
+  };
+
+  const docUrl = (doc) => supabase.storage.from("asset-documents").getPublicUrl(doc.file_path).data.publicUrl;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, width: "100%", maxWidth: 680, marginTop: 20, marginBottom: 20 }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div><div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>📁 {t(lang,"siteDocuments")} — {site}</div></div>
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 18, padding: "2px 10px" }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>
+          <ErrBanner msg={error} onDismiss={() => setError(null)} />
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 10 }}>
+              <Sel label={t(lang,"documentType")} value={docType} onChange={setDocType} options={SITE_DOC_TYPES} />
+              <Input label={t(lang,"issueDate")} value={issueDate} onChange={setIssueDate} type="date" />
+              <Input label={t(lang,"expiryDate")} value={expiryDate} onChange={setExpiryDate} type="date" />
+              <Input label={t(lang,"notes")} value={notes} onChange={setNotes} />
+            </div>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accent, color: "#fff", borderRadius: 6, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: uploading?"not-allowed":"pointer", opacity: uploading?0.7:1 }}>
+              {uploading ? "⏳..." : `📄 ${t(lang,"upload")}`}
+              <input type="file" onChange={uploadDoc} style={{ display: "none" }} disabled={uploading} />
+            </label>
+          </div>
+          {loading ? <Spinner lang={lang} /> : docs.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 32, color: C.muted, fontSize: 13, border: `2px dashed ${C.border}`, borderRadius: 10 }}>{t(lang,"noSiteDocumentsYet")}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {docs.map(doc => {
+                const expired = doc.expiry_date && doc.expiry_date < TODAY;
+                const expiringSoon = doc.expiry_date && !expired && doc.expiry_date <= new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0];
+                return (
+                  <div key={doc.id} style={{ background: C.surface, border: `1px solid ${expired?C.red+"44":expiringSoon?C.yellow+"44":C.border}`, borderRadius: 8, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{doc.document_type} — {doc.file_name}</div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                        {doc.uploaded_by} · {fmtDateTime(doc.uploaded_at)}
+                        {doc.issue_date && ` · ${t(lang,"issueDate")}: ${fmtDate(doc.issue_date)}`}
+                        {doc.expiry_date && ` · ${t(lang,"expiryDate")}: ${fmtDate(doc.expiry_date)}`}
+                        {doc.notes ? ` · ${doc.notes}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {expired && <Badge label={t(lang,"expired")} color={C.red} />}
+                      {expiringSoon && <Badge label={t(lang,"expiringSoon")} color={C.yellow} />}
+                      <Btn small onClick={() => window.open(docUrl(doc), "_blank")}>{t(lang,"view")}</Btn>
+                      {isAdmin && <Btn small variant="danger" onClick={() => deleteDoc(doc)}>{t(lang,"del")}</Btn>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InsurancePoliciesModal({ asset, onClose, lang }) {
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -6767,13 +6865,28 @@ function SiteLayoutModal({ site, onClose, lang, userRole }) {
     </div>
   );
 }
-function SitesManagement({ sites, setSites, lang, userRole }) {
+function SitesManagement({ sites, setSites, lang, userRole, isAdmin }) {
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [renameId, setRenameId] = useState(null);
   const [renameValue, setRenameValue] = useState("");
   const [layoutSite, setLayoutSite] = useState(null);
+  const [docsSite, setDocsSite] = useState(null);
+  const [docAlerts, setDocAlerts] = useState({}); // site -> { expired, expiringSoon }
+
+  useEffect(() => { loadDocAlerts(); }, []);
+  const loadDocAlerts = async () => {
+    const soonStr = new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0];
+    const { data } = await supabase.from("site_documents").select("site, expiry_date").not("expiry_date", "is", null);
+    const alerts = {};
+    (data||[]).forEach(d => {
+      if (!alerts[d.site]) alerts[d.site] = { expired: 0, expiringSoon: 0 };
+      if (d.expiry_date < TODAY) alerts[d.site].expired++;
+      else if (d.expiry_date <= soonStr) alerts[d.site].expiringSoon++;
+    });
+    setDocAlerts(alerts);
+  };
 
   const addSite = async () => {
     const name = newName.trim();
@@ -6801,6 +6914,7 @@ function SitesManagement({ sites, setSites, lang, userRole }) {
   return (
     <div>
       {layoutSite && <SiteLayoutModal site={layoutSite} onClose={() => setLayoutSite(null)} lang={lang} userRole={userRole} />}
+      {docsSite && <SiteDocumentsModal site={docsSite} onClose={() => { setDocsSite(null); loadDocAlerts(); }} lang={lang} userRole={userRole} isAdmin={isAdmin} />}
       <ErrBanner msg={error} onDismiss={() => setError(null)} />
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>{t(lang,"sitesManagement")}</div>
@@ -6823,8 +6937,10 @@ function SitesManagement({ sites, setSites, lang, userRole }) {
             ) : (
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>{s.name}</div>
             )}
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
               {s.active ? t(lang,"active") : t(lang,"inactiveStatus")}
+              {docAlerts[s.name]?.expired>0 && <Badge label={`${docAlerts[s.name].expired} ${t(lang,"expired")}`} color={C.red} />}
+              {docAlerts[s.name]?.expiringSoon>0 && <Badge label={`${docAlerts[s.name].expiringSoon} ${t(lang,"expiringSoon")}`} color={C.yellow} />}
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {renameId === s.id ? (
@@ -6839,6 +6955,7 @@ function SitesManagement({ sites, setSites, lang, userRole }) {
                 {s.active ? t(lang,"deactivate") : t(lang,"activate")}
               </Btn>
               <Btn small variant="secondary" onClick={() => setLayoutSite(s.name)}>🗺 {t(lang,"siteLayout")}</Btn>
+              <Btn small variant="secondary" onClick={() => setDocsSite(s.name)}>📁 {t(lang,"siteDocuments")}</Btn>
             </div>
           </div>
         ))}
@@ -7022,7 +7139,7 @@ export default function App() {
         {activeTab===t(lang,"calendar") && <MaintenanceCalendar workOrders={workOrders} assets={assets} lang={lang} />}
         {activeTab===t(lang,"partsCatalogMgmt") && isSupervisor && <PartsCatalogMgmt lang={lang} isAdmin={isAdmin} isSupervisor={isSupervisor} isEngineer={isEngineer} userRole={userRole} />}
         {activeTab===t(lang,"users") && isAdmin && <UserManagement lang={lang} sites={siteNames} />}
-        {activeTab===t(lang,"sitesManagement") && isAdmin && <SitesManagement sites={sites} setSites={setSites} lang={lang} userRole={userRole} />}
+        {activeTab===t(lang,"sitesManagement") && isAdmin && <SitesManagement sites={sites} setSites={setSites} lang={lang} userRole={userRole} isAdmin={isAdmin} />}
       </div>
     </div>
   );
