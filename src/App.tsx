@@ -3375,6 +3375,7 @@ function SiteDocumentsModal({ site, onClose, lang, userRole, isAdmin }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const [docType, setDocType] = useState("Operational License");
+  const [otherLabel, setOtherLabel] = useState("");
   const [issueDate, setIssueDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
   const [notes, setNotes] = useState("");
@@ -3391,14 +3392,16 @@ function SiteDocumentsModal({ site, onClose, lang, userRole, isAdmin }) {
 
   const uploadDoc = async (e) => {
     const file = e.target.files[0]; if (!file) return;
+    if (docType==="Other" && !otherLabel.trim()) { setError(t(lang,"otherDocumentTypeRequired")); e.target.value = ""; return; }
     if (file.size > 15 * 1024 * 1024) { setError(t(lang,"maxFileSize")); return; }
     setUploading(true); setError(null);
     const path = `sites/${site}/${Date.now()}-${file.name}`;
     const { error: upErr } = await supabase.storage.from("asset-documents").upload(path, file);
     if (upErr) { setError(upErr.message); setUploading(false); return; }
-    const record = { id: uid("SDOC"), site, document_type: docType, file_name: file.name, file_path: path, issue_date: issueDate||null, expiry_date: expiryDate||null, notes: notes||null, uploaded_by: userRole?.name||"—" };
+    const finalDocType = docType==="Other" ? otherLabel.trim() : docType;
+    const record = { id: uid("SDOC"), site, document_type: finalDocType, file_name: file.name, file_path: path, issue_date: issueDate||null, expiry_date: expiryDate||null, notes: notes||null, uploaded_by: userRole?.name||"—" };
     const { error: err } = await supabase.from("site_documents").insert([record]);
-    if (err) { setError(err.message); } else { setDocs(prev => [record, ...prev]); setNotes(""); setIssueDate(""); setExpiryDate(""); }
+    if (err) { setError(err.message); } else { setDocs(prev => [record, ...prev]); setNotes(""); setIssueDate(""); setExpiryDate(""); setOtherLabel(""); }
     setUploading(false);
     e.target.value = "";
   };
@@ -3423,6 +3426,7 @@ function SiteDocumentsModal({ site, onClose, lang, userRole, isAdmin }) {
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 10 }}>
               <Sel label={t(lang,"documentType")} value={docType} onChange={setDocType} options={SITE_DOC_TYPES} />
+              {docType==="Other" && <Input label={t(lang,"otherDocumentType")} value={otherLabel} onChange={setOtherLabel} placeholder={t(lang,"otherDocumentTypePlaceholder")} />}
               <Input label={t(lang,"issueDate")} value={issueDate} onChange={setIssueDate} type="date" />
               <Input label={t(lang,"expiryDate")} value={expiryDate} onChange={setExpiryDate} type="date" />
               <Input label={t(lang,"notes")} value={notes} onChange={setNotes} />
